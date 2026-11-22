@@ -205,7 +205,7 @@ function GroupSection(props: GroupSectionProps) {
             {!isKnownGroup && (
               <StatusBadge variant='danger' copyable={false}>
                 <AlertTriangle className='mr-1 h-3 w-3' />
-                {t('Not in pricing table')}
+                {t('Group is not in the registry')}
               </StatusBadge>
             )}
             <StatusBadge variant='neutral' copyable={false}>
@@ -295,7 +295,7 @@ function GroupSection(props: GroupSectionProps) {
                     !props.groupOptions.includes(rule.targetGroup) && (
                       <AlertTriangle
                         className='text-destructive h-4 w-4 shrink-0'
-                        aria-label={t('Not in pricing table')}
+                        aria-label={t('Group is not in the registry')}
                       />
                     )}
                 </div>
@@ -336,15 +336,22 @@ export function GroupSpecialUsableRulesEditor(
   props: GroupSpecialUsableRulesEditorProps
 ) {
   const { t } = useTranslation()
-  const [rules, setRules] = useState<Rule[]>(() =>
-    flattenRules(safeParseJson(props.value))
-  )
+  const [ruleState, setRuleState] = useState(() => ({
+    value: props.value,
+    rules: flattenRules(safeParseJson(props.value)),
+  }))
+  let rules = ruleState.rules
+  if (ruleState.value !== props.value) {
+    rules = flattenRules(safeParseJson(props.value))
+    setRuleState({ value: props.value, rules })
+  }
 
   const { onChange } = props
   const emitChange = useCallback(
     (newRules: Rule[]) => {
-      setRules(newRules)
-      onChange(serializeRules(newRules))
+      const value = serializeRules(newRules)
+      setRuleState({ value, rules: newRules })
+      onChange(value)
     },
     [onChange]
   )
@@ -416,10 +423,10 @@ export function GroupSpecialUsableRulesEditor(
   return (
     <Card className={sectionCardClassName}>
       <CardHeader className={sectionHeaderClassName}>
-        <CardTitle>{t('Special usable group rules')}</CardTitle>
+        <CardTitle>{t('Primary-group access rules')}</CardTitle>
         <CardDescription>
           {t(
-            'Make extra groups visible to, or hide default groups from, users of a specific group.'
+            "Rules follow the user's primary group. They can add inherited groups or hide them, while explicit assignments remain available."
           )}
         </CardDescription>
       </CardHeader>
@@ -428,7 +435,9 @@ export function GroupSpecialUsableRulesEditor(
           {grouped.length === 0 ? (
             <EmptyState
               className='min-h-40'
-              title={t('No rules yet. Add a group below to get started.')}
+              title={t(
+                'No rules yet. Add a primary group below to get started.'
+              )}
             />
           ) : (
             grouped.map((group) => (
@@ -450,7 +459,7 @@ export function GroupSpecialUsableRulesEditor(
               className='w-full sm:w-72'
               options={newGroupCandidates}
               value=''
-              placeholder={t('Add rules for a user group')}
+              placeholder={t('Add rules for a primary group')}
               onValueChange={addRuleToGroup}
             />
           </div>

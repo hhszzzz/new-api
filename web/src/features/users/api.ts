@@ -322,6 +322,13 @@ export async function getGroups(): Promise<ApiResponse<string[]>> {
   return res.data
 }
 
+export async function getGroupHistory(): Promise<
+  ApiResponse<Array<{ old_name: string; new_name: string; changed_at: number }>>
+> {
+  const res = await api.get('/api/group/history')
+  return res.data
+}
+
 /**
  * Get the permission catalog (resources, actions, and role baselines).
  * Source of truth lives in the backend authz package.

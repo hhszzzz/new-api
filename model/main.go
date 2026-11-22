@@ -351,6 +351,8 @@ func migrateDB() error {
 	}
 
 	err := DB.AutoMigrate(
+		&Group{},
+		&GroupNameHistory{},
 		&ChannelAggregate{},
 		&Channel{},
 		&Token{},

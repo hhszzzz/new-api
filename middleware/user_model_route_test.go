@@ -55,6 +55,7 @@ func setupUserModelRouteResolutionTest(t *testing.T) func(role int) *gin.Context
 		ctx.Set("id", 1)
 		ctx.Set("role", role)
 		common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default", "vip"})
+		common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"default", "vip"})
 		return ctx
 	}
 }

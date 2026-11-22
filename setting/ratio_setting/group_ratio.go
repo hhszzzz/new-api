@@ -76,6 +76,18 @@ func GetGroupRatioCopy() map[string]float64 {
 	return GetGroupRatioSetting().GroupRatio.ReadAll()
 }
 
+func GetGroupSpecialUsableGroupCopy() map[string]map[string]string {
+	configured := GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	copyRules := make(map[string]map[string]string, len(configured))
+	for primary, rules := range configured {
+		copyRules[primary] = make(map[string]string, len(rules))
+		for target, description := range rules {
+			copyRules[primary][target] = description
+		}
+	}
+	return copyRules
+}
+
 func ContainsGroupRatio(name string) bool {
 	_, ok := GetGroupRatioSetting().GroupRatio.Get(name)
 	return ok

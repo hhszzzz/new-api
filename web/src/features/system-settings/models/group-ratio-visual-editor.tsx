@@ -16,30 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import {
-  AlertTriangle,
-  ChevronDown,
-  Search,
-  X,
-  Info,
-  Plus,
-  Trash2,
-} from 'lucide-react'
-import { Reorder } from 'motion/react'
-import { useState, useMemo, useCallback, memo, type ReactNode } from 'react'
+import { AlertTriangle, ChevronDown, Plus, Trash2 } from 'lucide-react'
+import { useCallback, memo, useMemo, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { AutoGroupOrderItem } from '@/components/auto-group-order-item'
 import { StaticDataTable } from '@/components/data-table/static/static-data-table'
 import { StaticRowActions } from '@/components/data-table/static/static-row-actions'
 import { Dialog } from '@/components/dialog'
-import {
-  sideDrawerContentClassName,
-  sideDrawerFormClassName,
-  sideDrawerHeaderClassName,
-} from '@/components/drawer-layout'
 import { EmptyState } from '@/components/empty-state'
-import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -55,48 +39,24 @@ import {
 } from '@/components/ui/collapsible'
 import { Combobox } from '@/components/ui/combobox'
 import { Input } from '@/components/ui/input'
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupButton,
-  InputGroupInput,
-} from '@/components/ui/input-group'
 import { Label } from '@/components/ui/label'
-import { Separator } from '@/components/ui/separator'
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-} from '@/components/ui/sheet'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { toIntlLocale } from '@/i18n/languages'
-import { formatNumber } from '@/lib/format'
 
 import { safeJsonParse } from '../utils/json-parser'
+import { GroupRegistryEditor } from './group-registry-editor'
+import { GroupSpecialUsableRulesEditor } from './group-special-usable-editor'
 
-export type GroupSettingsSection = 'pricing' | 'overrides' | 'auto'
+export type GroupSettingsSection = 'groups' | 'access' | 'overrides'
 
 type GroupRatioVisualEditorProps = {
   section: GroupSettingsSection
   onSectionChange: (section: GroupSettingsSection) => void
   defaultUseAutoGroupField: ReactNode
   groupRatio: string
-  // Legacy option name. This map now supplies descriptions only; user
-  // memberships managed by administrators are the authorization source.
-  userUsableGroups: string
   groupGroupRatio: string
-  autoGroups: string
-  maxTokenAutoGroupsField: ReactNode
+  groupSpecialUsableGroup: string
+  onRegistryChanged: () => void
   onChange: (field: string, value: string) => void
-}
-
-type GroupPricingRow = {
-  _id: string
-  name: string
-  ratio: string
-  description: string
 }
 
 type RegistryEntry = {
@@ -106,12 +66,6 @@ type RegistryEntry = {
 
 const sectionCardClassName = 'min-w-0 shadow-none'
 const sectionHeaderClassName = 'gap-2 border-b'
-
-let groupPricingIdCounter = 0
-function createGroupPricingId() {
-  groupPricingIdCounter += 1
-  return `gpr_${groupPricingIdCounter}`
-}
 
 function normalizeRatio(value: unknown): number {
   const parsed = Number(value)
@@ -125,13 +79,6 @@ function parseRatioMap(value: string): Record<string, number> {
   })
 }
 
-function parseUsableMap(value: string): Record<string, string> {
-  return safeJsonParse<Record<string, string>>(value, {
-    fallback: {},
-    silent: true,
-  })
-}
-
 function parseNestedRatioMap(
   value: string
 ): Record<string, Record<string, number>> {
@@ -139,70 +86,6 @@ function parseNestedRatioMap(
     fallback: {},
     silent: true,
   })
-}
-
-function buildGroupPricingRows(
-  groupRatio: string,
-  userUsableGroups: string
-): GroupPricingRow[] {
-  const ratioMap = parseRatioMap(groupRatio)
-  const usableMap = parseUsableMap(userUsableGroups)
-  // Top-up ratios are retained as a legacy backend value, but are no longer
-  // part of the group-management UI. Do not let a legacy-only group reappear
-  // as an editable pricing group.
-  const names = Object.keys(ratioMap)
-
-  return names.map((name) => ({
-    _id: createGroupPricingId(),
-    name,
-    ratio: String(normalizeRatio(ratioMap[name])),
-    description: String(usableMap[name] ?? ''),
-  }))
-}
-
-function serializeGroupPricingRows(rows: GroupPricingRow[]) {
-  const groupRatio: Record<string, number> = {}
-  const userUsableGroups: Record<string, string> = {}
-
-  for (const row of rows) {
-    const name = row.name.trim()
-    if (!name) continue
-    groupRatio[name] = normalizeRatio(row.ratio)
-    userUsableGroups[name] = row.description
-  }
-
-  return {
-    GroupRatio: JSON.stringify(groupRatio, null, 2),
-    UserUsableGroups: JSON.stringify(userUsableGroups, null, 2),
-  }
-}
-
-function groupPricingSignature(rows: GroupPricingRow[]): string {
-  const serialized = serializeGroupPricingRows(rows)
-  return JSON.stringify({
-    groupRatio: parseRatioMap(serialized.GroupRatio),
-    userUsableGroups: parseUsableMap(serialized.UserUsableGroups),
-  })
-}
-
-function sourceGroupPricingSignature(
-  groupRatio: string,
-  userUsableGroups: string
-): string {
-  return JSON.stringify({
-    groupRatio: parseRatioMap(groupRatio),
-    userUsableGroups: parseUsableMap(userUsableGroups),
-  })
-}
-
-function UnknownGroupBadge() {
-  const { t } = useTranslation()
-  return (
-    <StatusBadge variant='danger' copyable={false}>
-      <AlertTriangle className='mr-1 h-3 w-3' />
-      {t('Not in pricing table')}
-    </StatusBadge>
-  )
 }
 
 type GroupNameSelectProps = {
@@ -240,15 +123,12 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
   onSectionChange,
   defaultUseAutoGroupField,
   groupRatio,
-  userUsableGroups,
   groupGroupRatio,
-  autoGroups,
-  maxTokenAutoGroupsField,
+  groupSpecialUsableGroup,
+  onRegistryChanged,
   onChange,
 }: GroupRatioVisualEditorProps) {
-  const { t, i18n } = useTranslation()
-  const locale = toIntlLocale(i18n.resolvedLanguage || i18n.language)
-  const [detailGroup, setDetailGroup] = useState<string | null>(null)
+  const { t } = useTranslation()
 
   const registry = useMemo<RegistryEntry[]>(() => {
     const ratioMap = parseRatioMap(groupRatio)
@@ -263,46 +143,6 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     [registry]
   )
 
-  // Auto groups
-  const autoGroupsList = useMemo(() => {
-    return safeJsonParse<string[]>(autoGroups, {
-      fallback: [],
-      context: 'auto groups',
-    })
-  }, [autoGroups])
-
-  const handleAutoGroupAdd = useCallback(
-    (name: string) => {
-      if (autoGroupsList.includes(name)) return
-      onChange('AutoGroups', JSON.stringify([...autoGroupsList, name], null, 2))
-    },
-    [autoGroupsList, onChange]
-  )
-
-  const handleAutoGroupDelete = useCallback(
-    (index: number) => {
-      const list = autoGroupsList.filter((_, i) => i !== index)
-      onChange('AutoGroups', JSON.stringify(list, null, 2))
-    },
-    [autoGroupsList, onChange]
-  )
-
-  const handleAutoGroupMove = useCallback(
-    (index: number, direction: 'up' | 'down') => {
-      const list = [...autoGroupsList]
-      const newIndex = direction === 'up' ? index - 1 : index + 1
-      if (newIndex < 0 || newIndex >= list.length) return
-      ;[list[index], list[newIndex]] = [list[newIndex], list[index]]
-      onChange('AutoGroups', JSON.stringify(list, null, 2))
-    },
-    [autoGroupsList, onChange]
-  )
-
-  const autoGroupCandidates = useMemo(
-    () => registryNames.filter((name) => !autoGroupsList.includes(name)),
-    [registryNames, autoGroupsList]
-  )
-
   return (
     <Tabs
       value={section}
@@ -311,23 +151,30 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
     >
       <div className='min-w-0 overflow-x-auto pb-1'>
         <TabsList aria-label={t('Group settings')} className='w-full min-w-max'>
-          <TabsTrigger value='pricing' className='px-3'>
-            {t('Pricing groups')}
+          <TabsTrigger value='groups' className='px-3'>
+            {t('Groups')}
+          </TabsTrigger>
+          <TabsTrigger value='access' className='px-3'>
+            {t('Primary-group access')}
           </TabsTrigger>
           <TabsTrigger value='overrides' className='px-3'>
-            {t('Special ratio rules')}
-          </TabsTrigger>
-          <TabsTrigger value='auto' className='px-3'>
-            {t('Auto group order')}
+            {t('Billing overrides')}
           </TabsTrigger>
         </TabsList>
       </div>
-      <TabsContent value='pricing' keepMounted>
-        <GroupPricingTable
-          groupRatio={groupRatio}
-          userUsableGroups={userUsableGroups}
-          onChange={onChange}
-          onShowDetail={setDetailGroup}
+      <TabsContent value='groups' keepMounted>
+        <Card className={sectionCardClassName}>
+          <CardContent className='pt-4'>
+            <GroupRegistryEditor onChanged={onRegistryChanged} />
+            <div className='mt-5 border-t pt-4'>{defaultUseAutoGroupField}</div>
+          </CardContent>
+        </Card>
+      </TabsContent>
+      <TabsContent value='access' keepMounted>
+        <GroupSpecialUsableRulesEditor
+          value={groupSpecialUsableGroup}
+          groupOptions={registryNames}
+          onChange={(value) => onChange('GroupSpecialUsableGroup', value)}
         />
       </TabsContent>
       <TabsContent value='overrides' keepMounted>
@@ -337,351 +184,9 @@ export const GroupRatioVisualEditor = memo(function GroupRatioVisualEditor({
           onChange={onChange}
         />
       </TabsContent>
-      <TabsContent value='auto' keepMounted>
-        <Card className={sectionCardClassName}>
-          <CardHeader className={sectionHeaderClassName}>
-            <CardTitle>{t('Auto group order')}</CardTitle>
-            <CardDescription>
-              {t(
-                "When a token uses auto, the system tries only the user's assigned groups in the configured order."
-              )}
-            </CardDescription>
-          </CardHeader>
-          <CardContent className='grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(16rem,0.7fr)]'>
-            <div className='flex min-w-0 flex-col gap-3'>
-              <GroupNameSelect
-                options={autoGroupCandidates}
-                value={null}
-                className='w-full'
-                placeholder={t('Add group')}
-                onValueChange={handleAutoGroupAdd}
-              />
-              {autoGroupsList.length === 0 ? (
-                <EmptyState
-                  className='min-h-40'
-                  title={t('No auto groups configured')}
-                  description={t(
-                    'Add groups in the order they should be tried.'
-                  )}
-                />
-              ) : (
-                <Reorder.Group
-                  as='ol'
-                  axis='y'
-                  values={autoGroupsList}
-                  onReorder={(groups) =>
-                    onChange('AutoGroups', JSON.stringify(groups, null, 2))
-                  }
-                  aria-label={t('Auto group order')}
-                  className='flex flex-col gap-2'
-                >
-                  {autoGroupsList.map((group, index) => (
-                    <AutoGroupOrderItem
-                      key={group}
-                      group={group}
-                      index={index}
-                      count={autoGroupsList.length}
-                      onMove={handleAutoGroupMove}
-                      onRemove={() => handleAutoGroupDelete(index)}
-                      leading={
-                        <span className='text-muted-foreground w-5 shrink-0 text-center text-sm tabular-nums'>
-                          {formatNumber(index + 1, locale)}
-                        </span>
-                      }
-                    >
-                      {!registryNames.includes(group) && <UnknownGroupBadge />}
-                    </AutoGroupOrderItem>
-                  ))}
-                </Reorder.Group>
-              )}
-            </div>
-            <div className='bg-muted/20 flex min-w-0 flex-col gap-4 self-start rounded-lg border p-4'>
-              {defaultUseAutoGroupField}
-              <Separator />
-              {maxTokenAutoGroupsField}
-            </div>
-          </CardContent>
-        </Card>
-      </TabsContent>
-
-      <GroupDetailSheet
-        groupName={detailGroup}
-        onOpenChange={(open) => {
-          if (!open) setDetailGroup(null)
-        }}
-        registry={registry}
-        userUsableGroups={userUsableGroups}
-        groupGroupRatio={groupGroupRatio}
-        autoGroups={autoGroupsList}
-      />
     </Tabs>
   )
 })
-
-type GroupPricingTableProps = {
-  groupRatio: string
-  userUsableGroups: string
-  onChange: (field: string, value: string) => void
-  onShowDetail: (name: string) => void
-}
-
-function GroupPricingTable({
-  groupRatio,
-  userUsableGroups,
-  onChange,
-  onShowDetail,
-}: GroupPricingTableProps) {
-  const { t } = useTranslation()
-  const [search, setSearch] = useState('')
-  const [rows, setRows] = useState<GroupPricingRow[]>(() =>
-    buildGroupPricingRows(groupRatio, userUsableGroups)
-  )
-  const incomingSignature = sourceGroupPricingSignature(
-    groupRatio,
-    userUsableGroups
-  )
-  const [syncedSignature, setSyncedSignature] = useState<string | undefined>(
-    undefined
-  )
-  if (syncedSignature !== incomingSignature) {
-    setSyncedSignature(incomingSignature)
-    setRows((currentRows) => {
-      if (groupPricingSignature(currentRows) === incomingSignature) {
-        return currentRows
-      }
-      return buildGroupPricingRows(groupRatio, userUsableGroups)
-    })
-  }
-
-  const emitRows = useCallback(
-    (nextRows: GroupPricingRow[]) => {
-      setRows(nextRows)
-      const serialized = serializeGroupPricingRows(nextRows)
-      onChange('GroupRatio', serialized.GroupRatio)
-      onChange('UserUsableGroups', serialized.UserUsableGroups)
-    },
-    [onChange]
-  )
-
-  const updateRow = useCallback(
-    (
-      id: string,
-      field: Exclude<keyof GroupPricingRow, '_id'>,
-      value: string | number | boolean
-    ) => {
-      emitRows(
-        rows.map((row) => (row._id === id ? { ...row, [field]: value } : row))
-      )
-    },
-    [emitRows, rows]
-  )
-
-  const addRow = useCallback(() => {
-    setSearch('')
-    const existingNames = new Set(rows.map((row) => row.name))
-    let index = 1
-    let name = `group_${index}`
-    while (existingNames.has(name)) {
-      index += 1
-      name = `group_${index}`
-    }
-    emitRows([
-      {
-        _id: createGroupPricingId(),
-        name,
-        ratio: '1',
-        description: '',
-      },
-      ...rows,
-    ])
-  }, [emitRows, rows])
-
-  const removeRow = useCallback(
-    (id: string) => {
-      emitRows(rows.filter((row) => row._id !== id))
-    },
-    [emitRows, rows]
-  )
-
-  const duplicateNames = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const row of rows) {
-      const name = row.name.trim()
-      if (!name) continue
-      counts.set(name, (counts.get(name) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-      .filter(([, count]) => count > 1)
-      .map(([name]) => name)
-  }, [rows])
-
-  const query = search.trim().toLowerCase()
-  const visibleRows = rows.filter(
-    (row) =>
-      !query ||
-      row.name.toLowerCase().includes(query) ||
-      row.description.toLowerCase().includes(query)
-  )
-
-  return (
-    <Card className={sectionCardClassName}>
-      <CardHeader className={sectionHeaderClassName}>
-        <div className='flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between'>
-          <div>
-            <CardTitle>{t('Pricing groups')}</CardTitle>
-            <CardDescription>
-              {t(
-                'Edit billing ratios and descriptions for administrator-assigned groups.'
-              )}
-            </CardDescription>
-          </div>
-          <Button onClick={addRow} size='sm' className='sm:self-start'>
-            <Plus className='mr-2 h-4 w-4' />
-            {t('Add group')}
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent>
-        <div className='flex min-w-0 flex-col gap-4'>
-          <InputGroup className='max-w-sm'>
-            <InputGroupAddon>
-              <Search aria-hidden='true' />
-            </InputGroupAddon>
-            <InputGroupInput
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              aria-label={t('Search groups by name or description')}
-              placeholder={t('Search groups by name or description')}
-            />
-            {search && (
-              <InputGroupAddon align='inline-end'>
-                <InputGroupButton
-                  size='icon-xs'
-                  aria-label={t('Clear search')}
-                  onClick={() => setSearch('')}
-                >
-                  <X aria-hidden='true' />
-                </InputGroupButton>
-              </InputGroupAddon>
-            )}
-          </InputGroup>
-          <StaticDataTable
-            tableClassName='min-w-[760px]'
-            tableProps={{ 'aria-label': t('Pricing groups') }}
-            data={visibleRows}
-            getRowKey={(row) => row._id}
-            emptyClassName='text-muted-foreground h-20 text-sm'
-            emptyContent={
-              <EmptyState
-                className='min-h-40'
-                title={
-                  query
-                    ? t('No results found')
-                    : t('No groups yet. Add a group to get started.')
-                }
-                action={
-                  query ? (
-                    <Button
-                      variant='outline'
-                      size='sm'
-                      onClick={() => setSearch('')}
-                    >
-                      {t('Clear search')}
-                    </Button>
-                  ) : undefined
-                }
-              />
-            }
-            columns={[
-              {
-                id: 'group',
-                header: t('Group name'),
-                className: 'min-w-40',
-                cell: (row) => (
-                  <Input
-                    value={row.name}
-                    aria-label={t('Group name')}
-                    onChange={(event) =>
-                      updateRow(row._id, 'name', event.target.value)
-                    }
-                    aria-invalid={duplicateNames.includes(row.name.trim())}
-                  />
-                ),
-              },
-              {
-                id: 'ratio',
-                header: t('Ratio'),
-                className: 'w-28',
-                cell: (row) => (
-                  <Input
-                    type='number'
-                    min={0}
-                    step={0.0001}
-                    value={row.ratio}
-                    aria-label={t('Ratio')}
-                    onChange={(event) =>
-                      updateRow(row._id, 'ratio', event.target.value)
-                    }
-                  />
-                ),
-              },
-              {
-                id: 'description',
-                header: t('Description'),
-                className: 'min-w-56',
-                cell: (row) => (
-                  <Input
-                    value={row.description}
-                    placeholder={t('Group description')}
-                    aria-label={`${t('Description')}: ${row.name || t('Group name')}`}
-                    onChange={(event) =>
-                      updateRow(row._id, 'description', event.target.value)
-                    }
-                  />
-                ),
-              },
-              {
-                id: 'actions',
-                header: t('Actions'),
-                className: 'text-right',
-                cellClassName: 'text-right',
-                cell: (row) => (
-                  <div className='flex justify-end gap-1'>
-                    <Button
-                      variant='ghost'
-                      size='sm'
-                      onClick={() => onShowDetail(row.name.trim())}
-                      disabled={!row.name.trim()}
-                      aria-label={t('Details')}
-                    >
-                      <Info className='h-4 w-4' />
-                    </Button>
-                    <Button
-                      variant='ghost'
-                      size='sm'
-                      onClick={() => removeRow(row._id)}
-                      aria-label={t('Delete')}
-                    >
-                      <Trash2 className='h-4 w-4' />
-                    </Button>
-                  </div>
-                ),
-              },
-            ]}
-          />
-
-          {duplicateNames.length > 0 && (
-            <p className='text-destructive text-sm'>
-              {t('Duplicate group names: {{names}}', {
-                names: duplicateNames.join(', '),
-              })}
-            </p>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  )
-}
 
 type GroupOverride = {
   targetGroup: string
@@ -807,10 +312,10 @@ function GroupOverrideRules({
   return (
     <Card className={sectionCardClassName}>
       <CardHeader className={sectionHeaderClassName}>
-        <CardTitle>{t('Special ratio rules')}</CardTitle>
+        <CardTitle>{t('Primary-group billing overrides')}</CardTitle>
         <CardDescription>
           {t(
-            'Each rule reads as a sentence: users of one group pay a special ratio when billed as another group. Without a rule, the billing group base ratio applies.'
+            'Each rule sets the billing ratio for users with one primary group when their token uses a specific billing group.'
           )}
         </CardDescription>
       </CardHeader>
@@ -824,7 +329,7 @@ function GroupOverrideRules({
             size='sm'
           >
             <Plus className='mr-2 h-4 w-4' />
-            {t('Add user group')}
+            {t('Add primary group')}
           </Button>
           {groupGroupRatioList.length === 0 && (
             <EmptyState
@@ -862,7 +367,7 @@ function GroupOverrideRules({
                         {!registryNames.includes(userGroupData.userGroup) && (
                           <AlertTriangle
                             className='text-destructive h-4 w-4'
-                            aria-label={t('Not in pricing table')}
+                            aria-label={t('Group is not in the registry')}
                           />
                         )}
                         <span className='text-muted-foreground text-sm'>
@@ -921,7 +426,9 @@ function GroupOverrideRules({
                                     ) && (
                                       <AlertTriangle
                                         className='text-destructive h-3.5 w-3.5'
-                                        aria-label={t('Not in pricing table')}
+                                        aria-label={t(
+                                          'Group is not in the registry'
+                                        )}
                                       />
                                     )}
                                   </span>
@@ -991,9 +498,9 @@ function GroupOverrideRules({
       <Dialog
         open={userGroupDialogOpen}
         onOpenChange={setUserGroupDialogOpen}
-        title={t('Add user group')}
+        title={t('Add primary group')}
         description={t(
-          'Create a new user group to configure ratio overrides for.'
+          'Choose a primary group to configure its billing overrides.'
         )}
         contentHeight='auto'
         bodyClassName='space-y-4'
@@ -1013,7 +520,7 @@ function GroupOverrideRules({
       >
         <div className='space-y-4 py-4'>
           <div className='space-y-2'>
-            <Label>{t('User group name')}</Label>
+            <Label>{t('Primary group')}</Label>
             <GroupNameSelect
               className='w-full'
               options={registryNames}
@@ -1098,11 +605,11 @@ function GroupOverrideDialog({
       description={
         userGroup
           ? t(
-              'Configure a custom ratio for "{{userGroup}}" users when using a specific token group.',
+              'Set the billing ratio for users whose primary group is {{userGroup}} when their token uses a specific billing group.',
               { userGroup }
             )
           : t(
-              'Configure a custom ratio for when users use a specific token group.'
+              'Set the billing ratio for each primary group and billing group pair.'
             )
       }
       contentHeight='auto'
@@ -1129,7 +636,7 @@ function GroupOverrideDialog({
             onValueChange={setTargetGroup}
           />
           <p className='text-muted-foreground text-xs'>
-            {t('The token group that will have a custom ratio')}
+            {t('The billing group used by the token')}
           </p>
         </div>
         <div className='space-y-2'>
@@ -1148,169 +655,15 @@ function GroupOverrideDialog({
             {baseRatio !== undefined
               ? t('(instead of {{ratio}})', { ratio: baseRatio })
               : t(
-                  'Multiplier applied when {{userGroup}} uses {{targetGroup}}',
+                  'Users with primary group {{userGroup}} pay this ratio when billed as {{targetGroup}}.',
                   {
-                    userGroup: userGroup || t('this user group'),
-                    targetGroup: targetGroup || t('this token group'),
+                    userGroup: userGroup || t('this primary group'),
+                    targetGroup: targetGroup || t('this billing group'),
                   }
                 )}
           </p>
         </div>
       </div>
     </Dialog>
-  )
-}
-
-type GroupDetailSheetProps = {
-  groupName: string | null
-  onOpenChange: (open: boolean) => void
-  registry: RegistryEntry[]
-  userUsableGroups: string
-  groupGroupRatio: string
-  autoGroups: string[]
-}
-
-function GroupDetailSheet(props: GroupDetailSheetProps) {
-  const { t } = useTranslation()
-  const name = props.groupName
-
-  const detail = useMemo(() => {
-    if (!name) return null
-
-    const entry = props.registry.find((item) => item.name === name)
-    const usableMap = parseUsableMap(props.userUsableGroups)
-    const overrideMap = parseNestedRatioMap(props.groupGroupRatio)
-
-    // Overrides that apply when other user groups bill as this group
-    const incomingOverrides: { userGroup: string; ratio: number }[] = []
-    for (const [userGroup, overrides] of Object.entries(overrideMap)) {
-      if (Object.hasOwn(overrides, name)) {
-        incomingOverrides.push({ userGroup, ratio: overrides[name] })
-      }
-    }
-
-    // Overrides that apply when users of this group bill as other groups
-    const outgoingOverrides = Object.entries(overrideMap[name] ?? {}).map(
-      ([targetGroup, ratio]) => ({ targetGroup, ratio })
-    )
-
-    const autoIndex = props.autoGroups.indexOf(name)
-
-    return {
-      ratio: entry?.ratio,
-      description: String(usableMap[name] ?? ''),
-      incomingOverrides,
-      outgoingOverrides,
-      autoIndex,
-    }
-  }, [
-    name,
-    props.registry,
-    props.userUsableGroups,
-    props.groupGroupRatio,
-    props.autoGroups,
-  ])
-
-  return (
-    <Sheet open={name !== null} onOpenChange={props.onOpenChange}>
-      <SheetContent
-        side='right'
-        className={sideDrawerContentClassName('sm:max-w-lg')}
-      >
-        <SheetHeader className={sideDrawerHeaderClassName()}>
-          <SheetTitle>
-            {t('Group details')}
-            {name ? `: ${name}` : ''}
-          </SheetTitle>
-          <SheetDescription>
-            {t('Everything configured for this group, in one place.')}
-          </SheetDescription>
-        </SheetHeader>
-
-        {detail && (
-          <div className={sideDrawerFormClassName('gap-5')}>
-            <section className='space-y-2'>
-              <h3 className='text-sm font-semibold'>{t('Overview')}</h3>
-              <dl className='space-y-1.5 text-sm'>
-                <div className='flex justify-between'>
-                  <dt className='text-muted-foreground'>{t('Ratio')}</dt>
-                  <dd className='font-medium'>{detail.ratio ?? '-'}</dd>
-                </div>
-                {detail.description && (
-                  <div className='flex justify-between gap-4'>
-                    <dt className='text-muted-foreground'>
-                      {t('Description')}
-                    </dt>
-                    <dd className='text-right font-medium'>
-                      {detail.description}
-                    </dd>
-                  </div>
-                )}
-                <div className='flex justify-between'>
-                  <dt className='text-muted-foreground'>
-                    {t('Auto group order')}
-                  </dt>
-                  <dd className='font-medium'>
-                    {detail.autoIndex >= 0
-                      ? t('Position {{position}}', {
-                          position: detail.autoIndex + 1,
-                        })
-                      : t('Not included')}
-                  </dd>
-                </div>
-              </dl>
-            </section>
-
-            <section className='space-y-2'>
-              <h3 className='text-sm font-semibold'>
-                {t('Ratio overrides when billed as this group')}
-              </h3>
-              {detail.incomingOverrides.length === 0 ? (
-                <p className='text-muted-foreground text-sm'>{t('None')}</p>
-              ) : (
-                <ul className='space-y-1 text-sm'>
-                  {detail.incomingOverrides.map((item) => (
-                    <li
-                      key={item.userGroup}
-                      className='flex justify-between rounded-md border px-3 py-1.5'
-                    >
-                      <span>
-                        {t('Users in {{group}}', { group: item.userGroup })}
-                      </span>
-                      <span className='font-medium'>{item.ratio}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section className='space-y-2'>
-              <h3 className='text-sm font-semibold'>
-                {t('Ratio overrides for users of this group')}
-              </h3>
-              {detail.outgoingOverrides.length === 0 ? (
-                <p className='text-muted-foreground text-sm'>{t('None')}</p>
-              ) : (
-                <ul className='space-y-1 text-sm'>
-                  {detail.outgoingOverrides.map((item) => (
-                    <li
-                      key={item.targetGroup}
-                      className='flex justify-between rounded-md border px-3 py-1.5'
-                    >
-                      <span>
-                        {t('When billed as {{group}}', {
-                          group: item.targetGroup,
-                        })}
-                      </span>
-                      <span className='font-medium'>{item.ratio}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-          </div>
-        )}
-      </SheetContent>
-    </Sheet>
   )
 }

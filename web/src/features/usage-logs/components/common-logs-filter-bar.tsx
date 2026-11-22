@@ -39,7 +39,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
-import { getGroups } from '@/features/users/api'
+import { getGroupHistory, getGroups } from '@/features/users/api'
 import { useMediaQuery } from '@/hooks'
 import { getUserGroups } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
@@ -137,14 +137,22 @@ export function CommonLogsFilterBar<TData>(
     queryFn: async () => requireServerSuccess(await getUserGroups()),
     enabled: !isAdmin,
   })
+  const { data: groupHistory } = useQuery({
+    queryKey: ['group-history'],
+    queryFn: async () => requireServerSuccess(await getGroupHistory()),
+    enabled: isAdmin,
+  })
   const groupOptions = useMemo(() => {
     const groups = isAdmin
-      ? (adminGroups?.data ?? [])
+      ? [
+          ...(adminGroups?.data ?? []),
+          ...(groupHistory?.data ?? []).map((entry) => entry.old_name),
+        ]
       : Object.keys(userGroups?.data ?? {})
-    return groups
+    return [...new Set(groups)]
       .filter((group) => group !== 'auto')
       .map((group) => ({ label: group, value: group }))
-  }, [isAdmin, adminGroups, userGroups])
+  }, [isAdmin, adminGroups, groupHistory, userGroups])
 
   const searchState = useMemo<CommonLogDraft>(() => {
     const { start, end } = getDefaultTimeRange()

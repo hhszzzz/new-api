@@ -136,16 +136,7 @@ func validateTokenGroup(c *gin.Context, userId int, group string) bool {
 
 func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) bool {
 	if len(groups) == 0 {
-		if err := token.SetAutoGroups(nil); err != nil {
-			common.ApiError(c, err)
-			return false
-		}
-		return true
-	}
-
-	maxCount := setting.GetMaxTokenAutoGroups()
-	if len(groups) > maxCount {
-		common.ApiErrorT(c, "A token can select at most {{max}} Auto groups", map[string]any{"max": maxCount})
+		common.ApiErrorT(c, "Auto groups must contain at least one group")
 		return false
 	}
 
@@ -249,8 +240,7 @@ func GetTokenAutoGroups(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"groups":    service.GetUserAutoGroups(userGroups),
-		"max_count": setting.GetMaxTokenAutoGroups(),
+		"groups": service.GetUserAutoGroups(userGroups),
 	})
 }
 
@@ -403,11 +393,32 @@ func AddToken(c *gin.Context) {
 		})
 		return
 	}
+	if strings.TrimSpace(token.Group) == "" {
+		user, err := model.GetUserCache(c.GetInt("id"))
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		if setting.DefaultUseAutoGroup {
+			token.Group = "auto"
+		} else {
+			token.Group = user.Group
+		}
+	}
 	if !validateTokenGroup(c, c.GetInt("id"), token.Group) {
 		return
 	}
 	if token.Group == "auto" {
-		if !setTokenAutoGroups(c, &token, request.AutoGroups.Groups) {
+		autoGroups := request.AutoGroups.Groups
+		if !request.AutoGroups.Set {
+			userGroups, err := getTokenRequestUserGroups(c)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			autoGroups = service.GetUserAutoGroups(userGroups)
+		}
+		if !setTokenAutoGroups(c, &token, autoGroups) {
 			return
 		}
 	} else {
@@ -542,6 +553,15 @@ func UpdateToken(c *gin.Context) {
 			_ = cleanToken.SetAutoGroups(nil)
 		} else if request.AutoGroups.Set {
 			if !setTokenAutoGroups(c, cleanToken, request.AutoGroups.Groups) {
+				return
+			}
+		} else if previous.Group != "auto" {
+			userGroups, err := getTokenRequestUserGroups(c)
+			if err != nil {
+				common.ApiError(c, err)
+				return
+			}
+			if !setTokenAutoGroups(c, cleanToken, service.GetUserAutoGroups(userGroups)) {
 				return
 			}
 		}

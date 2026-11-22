@@ -317,6 +317,9 @@ func publishPersistedOptions(options []*Option) {
 		common.SysLog("failed to update pricing option maps: " + err.Error())
 	}
 	applyPasskeyDomainOptions(passkeyOptions)
+	if err := SyncGroupRegistryFromSettings(); err != nil {
+		common.SysLog(common.LogText("failed to synchronize group registry: %s", err.Error()))
+	}
 }
 
 func SyncOptions(frequency int) {
@@ -466,9 +469,8 @@ func updateOptionsBulk(values map[string]string, preview bool, confirmation stri
 		}
 	}
 
-	// Groups are settings keys, not table rows: removing a key deletes the group
-	// with no referential check. Block it while an active subscription still grants
-	// the group so a funded subscription cannot lose its group silently.
+	// Legacy GroupRatio options can import groups, but group deletion must run
+	// through the registry so live references are rewritten transactionally.
 	removedGroups := make([]string, 0)
 	if value, ok := values["GroupRatio"]; ok {
 		var next map[string]float64
@@ -477,7 +479,7 @@ func updateOptionsBulk(values map[string]string, preview bool, confirmation stri
 		}
 		for group := range ratio_setting.GetGroupRatioSetting().GroupRatio.ReadAll() {
 			if _, kept := next[group]; !kept {
-				removedGroups = append(removedGroups, group)
+				return nil, ErrGroupRemovalRequiresRegistry
 			}
 		}
 	}
@@ -513,6 +515,9 @@ func updateOptionsBulk(values map[string]string, preview bool, confirmation stri
 			if err != nil {
 				return err
 			}
+		}
+		if err := SnapshotChangedTaskGroupRatiosWithTx(tx, values); err != nil {
+			return err
 		}
 		return persistOptionsWithTx(tx, values)
 	})
@@ -572,6 +577,9 @@ func updateOptionsBulk(values map[string]string, preview bool, confirmation stri
 	}
 	if policySnapshot != nil {
 		requestPolicySnapshot.Store(policySnapshot)
+	}
+	if err := SyncGroupRegistryFromSettings(); err != nil {
+		common.SysLog(common.LogText("failed to synchronize group registry: %s", err.Error()))
 	}
 	return passkeyChange, nil
 }

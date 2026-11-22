@@ -73,7 +73,7 @@ export async function getApiKey(id: number): Promise<ApiResponse<ApiKey>> {
   return res.data
 }
 
-// Get the current user's global Auto order and the per-token selection limit.
+// Get the current user's authorized candidates for token-specific Auto order.
 export async function getTokenAutoGroups(): Promise<
   ApiResponse<TokenAutoGroupsConfig>
 > {

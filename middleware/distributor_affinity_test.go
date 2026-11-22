@@ -61,6 +61,7 @@ func TestResolveAffinitySelectionGroupPreservesAutoGroupSelection(t *testing.T) 
 
 	ctx, _ := gin.CreateTestContext(nil)
 	common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"premium", "default"})
+	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"default", "premium"})
 
 	group, usable := resolveAffinitySelectionGroup(ctx, "auto", "gpt-5.4", 17)
 

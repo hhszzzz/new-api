@@ -215,6 +215,7 @@ func autoGroupSelectionContext() *gin.Context {
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	common.SetContextKey(context, constant.ContextKeyUserGroups, []string{"default", "vip"})
+	common.SetContextKey(context, constant.ContextKeyTokenAutoGroups, []string{"default", "vip"})
 	return context
 }
 

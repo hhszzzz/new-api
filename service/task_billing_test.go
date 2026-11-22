@@ -607,6 +607,35 @@ func TestRecalculateTaskQuotaByTokensUsesPersistedBillingSnapshot(t *testing.T) 
 	assert.Equal(t, 240, getTaskQuota(t, task.ID))
 }
 
+func TestRecalculateTaskQuotaByTokensHonorsZeroGroupRatioSnapshot(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 42, 42, 42
+	const initialQuota, tokenRemain, preConsumed = 10_000, 5_000, 100
+	seedUser(t, userID, initialQuota)
+	seedToken(t, tokenID, userID, "sk-task-zero-group-snapshot", tokenRemain)
+	seedChannel(t, channelID)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.ModelRatio = 2
+	task.PrivateData.BillingContext.GroupRatio = 0
+	task.PrivateData.BillingContext.GroupRatioSnapshot = true
+	require.NoError(t, model.DB.Create(task).Error)
+
+	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":99}`))
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
+	})
+
+	require.True(t, RecalculateTaskQuotaByTokens(ctx, task, 20))
+	assert.Zero(t, task.Quota)
+	assert.Equal(t, initialQuota+preConsumed, getUserQuota(t, userID))
+	assert.Equal(t, tokenRemain+preConsumed, getTokenRemainQuota(t, tokenID))
+	assert.Zero(t, getTaskQuota(t, task.ID))
+}
+
 func TestRecalculateLegacyTaskUsesUserAndExecutionGroupPair(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

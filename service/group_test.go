@@ -36,7 +36,7 @@ func TestGetAuthorizedUserGroupsUsesAdminMembershipsAsOnlySource(t *testing.T) {
 	assert.Equal(t, "Staff description", unassigned["staff"])
 	assert.NotContains(t, unassigned, "vip")
 	assert.NotContains(t, unassigned, "default")
-	assert.NotContains(t, unassigned, "auto")
+	assert.Contains(t, unassigned, "auto")
 }
 
 func TestGetAuthorizedUserGroupsFallsBackToAssignedGroupName(t *testing.T) {
@@ -53,4 +53,40 @@ func TestGetAuthorizedUserGroupsFallsBackToAssignedGroupName(t *testing.T) {
 
 	assert.Equal(t, "vip", groups["vip"])
 	assert.NotContains(t, groups, "default")
+}
+
+func TestGetAuthorizedUserGroupsAppliesPrimaryGroupRules(t *testing.T) {
+	previousUsableGroups := setting.UserUsableGroups2JSONString()
+	previousGroupRatios := ratio_setting.GroupRatio2JSONString()
+	rules := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
+	previousRules := rules.ReadAll()
+	clonedRules := make(map[string]map[string]string, len(previousRules))
+	for primary, values := range previousRules {
+		clonedRules[primary] = make(map[string]string, len(values))
+		for target, description := range values {
+			clonedRules[primary][target] = description
+		}
+	}
+	t.Cleanup(func() {
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(previousUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(previousGroupRatios))
+		rules.Clear()
+		rules.AddAll(clonedRules)
+	})
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"vip":"VIP","partner":"Partner","hidden":"Hidden"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"vip":1,"partner":1,"hidden":1}`))
+	rules.Clear()
+	rules.Set("vip", map[string]string{
+		"+:partner": "Inherited partner access",
+		"-:hidden":  "",
+	})
+
+	groups := GetAuthorizedUserGroups([]string{"vip"})
+
+	assert.Equal(t, "Inherited partner access", groups["partner"])
+	assert.NotContains(t, groups, "hidden")
+	assert.Contains(t, groups, "auto")
+
+	withExplicitHidden := GetAuthorizedUserGroups([]string{"vip", "hidden"})
+	assert.Equal(t, "Hidden", withExplicitHidden["hidden"])
 }

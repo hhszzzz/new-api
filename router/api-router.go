@@ -398,6 +398,12 @@ func SetApiRouter(router *gin.Engine) {
 		groupRoute.Use(middleware.AdminAuth())
 		{
 			groupRoute.GET("/", controller.GetGroups)
+			groupRoute.GET("/manage", controller.GetGroupRegistry)
+			groupRoute.POST("/manage", controller.CreateGroup)
+			groupRoute.PUT("/manage", controller.UpdateGroup)
+			groupRoute.DELETE("/manage", controller.DeleteGroup)
+			groupRoute.DELETE("/manage/:name", controller.DeleteGroup)
+			groupRoute.GET("/history", controller.GetGroupHistory)
 		}
 
 		prefillGroupRoute := apiRouter.Group("/prefill_group")

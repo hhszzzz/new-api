@@ -289,8 +289,7 @@ func TestUpdateOptionsBulkBlocksRemovingGroupUsedByActiveSubscription(t *testing
 	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(original)) })
 
 	err := UpdateOptionsBulk(map[string]string{"GroupRatio": `{"default":1}`})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pro")
+	require.ErrorIs(t, err, ErrGroupRemovalRequiresRegistry)
 }
 
 func TestPreConsumeUserSubscriptionRollingWindowsLimitAndReopen(t *testing.T) {

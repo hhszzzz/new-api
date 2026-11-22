@@ -380,12 +380,13 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return false
 	}
 
+	billingContext := task.PrivateData.BillingContext
+	if billingContext != nil && billingContext.PerCallBilling {
+		return false
+	}
 	var modelRatio float64
 	var finalGroupRatio float64
-	if billingContext := task.PrivateData.BillingContext; billingContext != nil && billingContext.ModelRatio > 0 && billingContext.GroupRatio > 0 {
-		if billingContext.PerCallBilling {
-			return false
-		}
+	if billingContext != nil && billingContext.ModelRatio > 0 && (billingContext.GroupRatioSnapshot || billingContext.GroupRatio > 0) {
 		modelRatio = billingContext.ModelRatio
 		finalGroupRatio = billingContext.GroupRatio
 	} else {
@@ -394,7 +395,6 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 			return false
 		}
 		modelRatio = modelRatioSetting
-
 		executionGroup := task.Group
 		userGroup := ""
 		if user, err := model.GetUserById(task.UserId, false); err == nil {

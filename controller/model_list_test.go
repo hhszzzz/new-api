@@ -367,8 +367,7 @@ func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 
 	models := decodeUserModelsResponse(t, recorder)
 	require.Len(t, models, 3)
-	assert.ElementsMatch(t, []string{"zz-vip-model", "zz-shared-model"}, models[:2])
-	assert.Equal(t, "zz-default-model", models[2])
+	assert.Equal(t, []string{"zz-default-model", "zz-shared-model", "zz-vip-model"}, models)
 }
 
 func TestListModelsIncludesTieredBillingModel(t *testing.T) {

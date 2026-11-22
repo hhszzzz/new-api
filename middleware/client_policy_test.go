@@ -181,6 +181,7 @@ func TestSetupContextForSelectedChannelEnforcesClientPolicyForAutoGroupPin(t *te
 	ctx.Request.Header.Set("User-Agent", "codex_cli_rs/1.0")
 	common.SetContextKey(ctx, constant.ContextKeyUsingGroup, "auto")
 	common.SetContextKey(ctx, constant.ContextKeyUserGroups, []string{"default", "vip"})
+	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"default", "vip"})
 
 	require.Nil(t, SetupContextForSelectedChannel(ctx, channel, modelName, false))
 	assert.Equal(t, "vip", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
@@ -195,6 +196,7 @@ func TestSetupContextForSelectedChannelEnforcesClientPolicyForAutoGroupPin(t *te
 	blocked.Request.Header.Set("User-Agent", "codex_cli_rs/1.0")
 	common.SetContextKey(blocked, constant.ContextKeyUsingGroup, "auto")
 	common.SetContextKey(blocked, constant.ContextKeyUserGroups, []string{"default", "vip"})
+	common.SetContextKey(blocked, constant.ContextKeyTokenAutoGroups, []string{"default", "vip"})
 
 	apiErr := SetupContextForSelectedChannel(blocked, channel, modelName, false)
 	require.NotNil(t, apiErr)

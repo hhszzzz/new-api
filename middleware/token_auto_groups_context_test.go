@@ -28,13 +28,14 @@ func TestSetupContextForTokenPreservesCustomAutoGroupsOrder(t *testing.T) {
 	assert.Equal(t, []string{"vip", "default"}, value)
 }
 
-func TestSetupContextForTokenTreatsStoredEmptyArrayAsInheritance(t *testing.T) {
+func TestSetupContextForAutoTokenPreservesStoredEmptyArray(t *testing.T) {
 	ctx := newTokenAutoGroupsContext()
-	token := &model.Token{Id: 1, UserId: 2, AutoGroups: `[]`}
+	token := &model.Token{Id: 1, UserId: 2, Group: "auto", AutoGroups: `[]`}
 
 	require.NoError(t, SetupContextForToken(ctx, token))
-	_, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAutoGroups)
-	assert.False(t, ok)
+	value, ok := common.GetContextKey(ctx, constant.ContextKeyTokenAutoGroups)
+	require.True(t, ok)
+	assert.Equal(t, []string{}, value)
 }
 
 func TestSetupContextForTokenMalformedAutoGroupsFailsClosed(t *testing.T) {

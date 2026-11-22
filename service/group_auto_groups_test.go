@@ -38,16 +38,16 @@ func newRequestAutoGroupsContext() *gin.Context {
 	return ctx
 }
 
-func TestGetRequestAutoGroupsInheritedListIsNotLimited(t *testing.T) {
+func TestGetRequestAutoGroupsRequiresTokenConfiguration(t *testing.T) {
 	configureRequestAutoGroupsTest(t)
 	ctx := newRequestAutoGroupsContext()
 
 	groups := GetRequestAutoGroupsForGroups(ctx, []string{"default", "vip", "svip"})
 
-	assert.Equal(t, []string{"vip", "default", "svip"}, groups)
+	assert.Empty(t, groups)
 }
 
-func TestGetRequestAutoGroupsFiltersBeforeApplyingCurrentLimit(t *testing.T) {
+func TestGetRequestAutoGroupsFiltersUnauthorizedCandidatesWithoutGlobalLimit(t *testing.T) {
 	configureRequestAutoGroupsTest(t)
 	ctx := newRequestAutoGroupsContext()
 	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"revoked", "vip", "default", "svip"})
@@ -56,9 +56,9 @@ func TestGetRequestAutoGroupsFiltersBeforeApplyingCurrentLimit(t *testing.T) {
 	userGroups := []string{"default", "vip", "svip"}
 	groups := GetRequestAutoGroupsForGroups(ctx, userGroups)
 
-	assert.Equal(t, []string{"vip", "default"}, groups)
+	assert.Equal(t, []string{"vip", "default", "svip"}, groups)
 	require.NoError(t, setting.UpdateMaxTokenAutoGroups("1"))
-	assert.Equal(t, []string{"vip"}, GetRequestAutoGroupsForGroups(ctx, userGroups))
+	assert.Equal(t, []string{"vip", "default", "svip"}, GetRequestAutoGroupsForGroups(ctx, userGroups))
 }
 
 func TestGetRequestAutoGroupsDoesNotFallBackAfterPermissionChange(t *testing.T) {

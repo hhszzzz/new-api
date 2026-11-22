@@ -68,6 +68,14 @@ async function renderFilter(
   }
 ) {
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    if (url === '/api/group/history') {
+      return {
+        data: {
+          success: true,
+          data: [{ old_name: 'retired', new_name: '', changed_at: 1 }],
+        },
+      }
+    }
     if (url === '/api/user/self/groups' || url === '/api/group/') {
       if (groups === null) throw new Error('Group loading failed')
       return {
@@ -151,7 +159,9 @@ it('loads all groups in the administrator view', async () => {
   await renderFilter()
   await userEvent.click(screen.getByRole('combobox', { name: 'Group' }))
   expect(await screen.findByRole('option', { name: 'premium' })).toBeVisible()
+  expect(await screen.findByRole('option', { name: 'retired' })).toBeVisible()
   expect(api.get).toHaveBeenCalledWith('/api/group/')
+  expect(api.get).toHaveBeenCalledWith('/api/group/history')
   expect(api.get).not.toHaveBeenCalledWith('/api/user/self/groups')
 })
 

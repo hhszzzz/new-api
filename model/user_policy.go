@@ -216,7 +216,10 @@ func policyTableMissing(err error) bool {
 
 func legacyUserGroups(group string) []string {
 	group = strings.TrimSpace(group)
-	if group == "" || group == "auto" {
+	if group == "" {
+		return nil
+	}
+	if group == "auto" {
 		group = defaultUserGroup
 	}
 	return []string{group}

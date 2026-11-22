@@ -448,7 +448,7 @@ export function RatioSettingsCard({
 
   const handleResetRatios = useCallback(() => {
     setConfirmOpen(true)
-  }, [])
+  }, [setConfirmOpen])
 
   const { mutate: resetMutate } = resetMutation
   const handleConfirmReset = useCallback(() => {
@@ -515,6 +515,20 @@ export function RatioSettingsCard({
         <GroupRatioForm
           form={groupForm}
           onSave={saveGroupRatios}
+          onRegistryChanged={(values) => {
+            groupNormalizedDefaults.current = {
+              GroupRatio: normalizeJsonString(values.GroupRatio),
+              TopupGroupRatio: normalizeJsonString(values.TopupGroupRatio),
+              UserUsableGroups: normalizeJsonString(values.UserUsableGroups),
+              GroupGroupRatio: normalizeJsonString(values.GroupGroupRatio),
+              AutoGroups: normalizeJsonString(values.AutoGroups),
+              MaxTokenAutoGroups: values.MaxTokenAutoGroups,
+              DefaultUseAutoGroup: values.DefaultUseAutoGroup,
+              GroupSpecialUsableGroup: normalizeJsonString(
+                values.GroupSpecialUsableGroup
+              ),
+            }
+          }}
           isSaving={updateOption.isPending}
         />
       )

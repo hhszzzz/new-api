@@ -347,6 +347,10 @@ func Register(c *gin.Context) {
 		token.AllowUserQuotaQuery = true
 		if setting.DefaultUseAutoGroup {
 			token.Group = "auto"
+			if err := token.SetAutoGroups(service.GetUserAutoGroups(cleanUser.Groups)); err != nil {
+				common.ApiErrorT(c, "Failed to configure Auto groups for the default token")
+				return
+			}
 		} else if len(cleanUser.Groups) > 0 {
 			token.Group = cleanUser.Groups[0]
 		}
@@ -675,7 +679,7 @@ func GetUserModels(c *gin.Context) {
 				seenGroups[userGroup] = struct{}{}
 			}
 		}
-		for _, autoGroup := range setting.GetAutoGroups() {
+		for _, autoGroup := range service.GetUserAutoGroups(user.Groups) {
 			if _, ok := groups[autoGroup]; ok {
 				if _, seen := seenGroups[autoGroup]; !seen {
 					groupsToQuery = append(groupsToQuery, autoGroup)

@@ -648,6 +648,14 @@ func TokenAuth() func(c *gin.Context) {
 			abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthGroupDeprecated, map[string]any{"Group": tokenGroup}))
 			return
 		}
+		if tokenGroup == "auto" {
+			autoGroups, err := token.GetAutoGroups()
+			if err != nil || len(autoGroups) == 0 || len(service.FilterUserTokenAutoGroupsForGroups(userCache.Groups, autoGroups)) == 0 {
+				abortWithProtocolMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgAuthTokenNoValidGroup))
+				return
+			}
+			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
+		}
 		common.SetContextKey(c, constant.ContextKeyUsingGroup, tokenGroup)
 
 		err = SetupContextForToken(c, token, parts...)
@@ -702,13 +710,13 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 	}
 	common.SetContextKey(c, constant.ContextKeyTokenGroup, token.Group)
 	common.SetContextKey(c, constant.ContextKeyTokenCrossGroupRetry, token.CrossGroupRetry)
-	if token.AutoGroups != "" {
+	if token.Group == "auto" || token.AutoGroups != "" {
 		autoGroups, err := token.GetAutoGroups()
 		if err != nil {
 			common.SysError(common.LogText("failed to parse auto groups for token %d: %v", token.Id, err))
 			autoGroups = []string{}
 			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
-		} else if len(autoGroups) > 0 {
+		} else {
 			common.SetContextKey(c, constant.ContextKeyTokenAutoGroups, autoGroups)
 		}
 	}

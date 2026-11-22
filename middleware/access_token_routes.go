@@ -42,6 +42,7 @@ func accessTokenScopeRule(scope string) accessTokenRouteRule {
 // DeclareAccessTokenPermissionRoute when they are registered.
 var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/perf-metrics/status":                               accessTokenAnyRule,
+	"GET /api/status/concurrency":                                accessTokenScopeRule("ops:read"),
 	"GET /api/model-radar":                                       accessTokenAnyRule,
 	"GET /api/model-radar/manage":                                accessTokenScopeRule("option:read"),
 	"POST /api/model-radar/sync":                                 accessTokenScopeRule("option:write"),
@@ -54,8 +55,8 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"POST /api/account-pool/refresh":                             accessTokenScopeRule("profile:read"),
 	"GET /api/account-pool/settings":                             accessTokenScopeRule("option:read"),
 	"PUT /api/account-pool/settings":                             accessTokenScopeRule("option:write"),
-	"PUT /api/account-pool/accounts/:publicId/quota-override":     accessTokenScopeRule("option:write"),
-	"DELETE /api/account-pool/accounts/:publicId/quota-override":  accessTokenScopeRule("option:write"),
+	"PUT /api/account-pool/accounts/:publicId/quota-override":    accessTokenScopeRule("option:write"),
+	"DELETE /api/account-pool/accounts/:publicId/quota-override": accessTokenScopeRule("option:write"),
 	"PUT /api/option/group-rate-limits":                          accessTokenScopeRule("option:write"),
 	"PUT /api/option/model-pricing":                              accessTokenScopeRule("option:write"),
 	"PUT /api/option/client-policy":                              accessTokenScopeRule("option:write"),
@@ -278,11 +279,17 @@ var accessTokenRouteRules = map[string]accessTokenRouteRule{
 	"GET /api/data/flow/self":                   accessTokenScopeRule("usage:read"),
 
 	// router/api-router.go: /api/group, /api/prefill_group
-	"GET /api/group/":               accessTokenScopeRule("group:read"),
-	"GET /api/prefill_group/":       accessTokenScopeRule("group:read"),
-	"POST /api/prefill_group/":      accessTokenScopeRule("group:write"),
-	"PUT /api/prefill_group/":       accessTokenScopeRule("group:write"),
-	"DELETE /api/prefill_group/:id": accessTokenScopeRule("group:write"),
+	"GET /api/group/":                accessTokenScopeRule("group:read"),
+	"GET /api/group/manage":          accessTokenScopeRule("group:read"),
+	"GET /api/group/history":         accessTokenScopeRule("group:read"),
+	"POST /api/group/manage":         accessTokenScopeRule("group:write"),
+	"PUT /api/group/manage":          accessTokenScopeRule("group:write"),
+	"DELETE /api/group/manage":       accessTokenScopeRule("group:write"),
+	"DELETE /api/group/manage/:name": accessTokenScopeRule("group:write"),
+	"GET /api/prefill_group/":        accessTokenScopeRule("group:read"),
+	"POST /api/prefill_group/":       accessTokenScopeRule("group:write"),
+	"PUT /api/prefill_group/":        accessTokenScopeRule("group:write"),
+	"DELETE /api/prefill_group/:id":  accessTokenScopeRule("group:write"),
 
 	// router/api-router.go: /api/mj, /api/task
 	"GET /api/mj/self":                 accessTokenScopeRule("usage:read"),

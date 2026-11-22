@@ -1,6 +1,7 @@
 package service
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -15,6 +16,7 @@ import (
 func getAssignedUserGroups(userGroups []string) map[string]string {
 	descriptions := setting.GetUserUsableGroupsCopy()
 	configuredGroups := ratio_setting.GetGroupRatioCopy()
+	explicit := make(map[string]struct{}, len(userGroups))
 	groups := make(map[string]string, len(userGroups))
 	for _, group := range userGroups {
 		group = strings.TrimSpace(group)
@@ -28,9 +30,59 @@ func getAssignedUserGroups(userGroups []string) map[string]string {
 		if description == "" {
 			description = group
 		}
+		explicit[group] = struct{}{}
+		groups[group] = description
+	}
+	primaryGroup := ""
+	if len(userGroups) > 0 {
+		primaryGroup = strings.TrimSpace(userGroups[0])
+	}
+	granted := make(map[string]string)
+	hidden := make(map[string]struct{})
+	rules := ratio_setting.GetGroupSpecialUsableGroupCopy()[primaryGroup]
+	if primaryGroup == "" {
+		rules = nil
+	}
+	for rawTarget, description := range rules {
+		visible, target := parseSpecialUsableGroupRule(rawTarget)
+		if target == "" || target == "auto" {
+			continue
+		}
+		if _, exists := configuredGroups[target]; !exists {
+			continue
+		}
+		if visible {
+			granted[target] = strings.TrimSpace(description)
+		} else {
+			hidden[target] = struct{}{}
+		}
+	}
+	for group := range hidden {
+		if _, assigned := explicit[group]; !assigned {
+			delete(groups, group)
+			delete(granted, group)
+		}
+	}
+	for group, description := range granted {
+		if _, assigned := explicit[group]; assigned {
+			continue
+		}
+		if description == "" {
+			description = strings.TrimSpace(descriptions[group])
+		}
+		if description == "" {
+			description = group
+		}
 		groups[group] = description
 	}
 	return groups
+}
+
+func parseSpecialUsableGroupRule(rawTarget string) (bool, string) {
+	if strings.HasPrefix(rawTarget, "-:") {
+		return false, strings.TrimPrefix(rawTarget, "-:")
+	}
+	return true, strings.TrimPrefix(rawTarget, "+:")
 }
 
 // GetUserUsableGroups retains the legacy single-user-group contract.
@@ -81,19 +133,14 @@ func GetUserAutoGroups(userGroups []string) []string {
 }
 
 func getAutoGroups(usableGroups map[string]string) []string {
-	autoGroups := make([]string, 0)
-	seen := make(map[string]struct{})
-	for _, group := range setting.GetAutoGroups() {
-		if _, ok := usableGroups[group]; !ok {
-			continue
+	configured := make([]string, 0, len(usableGroups))
+	for group := range usableGroups {
+		if group != "auto" {
+			configured = append(configured, group)
 		}
-		if _, ok := seen[group]; ok {
-			continue
-		}
-		seen[group] = struct{}{}
-		autoGroups = append(autoGroups, group)
 	}
-	return autoGroups
+	slices.Sort(configured)
+	return configured
 }
 
 func IsUserSelectableGroup(userGroup, groupName string) bool {
@@ -107,15 +154,14 @@ func IsUserSelectableGroupForGroups(userGroups []string, groupName string) bool 
 	return GroupInUserUsableGroupsForGroups(userGroups, groupName) && ratio_setting.ContainsGroupRatio(groupName)
 }
 
-// FilterUserTokenAutoGroups applies current permissions before the current
-// per-token limit. It intentionally does not fall back to the global Auto list.
+// FilterUserTokenAutoGroups applies current permissions to a token's ordered
+// candidate list. The user-selected order is retained without a global limit.
 func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
 	return FilterUserTokenAutoGroupsForGroups([]string{userGroup}, groups)
 }
 
 func FilterUserTokenAutoGroupsForGroups(userGroups []string, groups []string) []string {
-	maxCount := setting.GetMaxTokenAutoGroups()
-	filtered := make([]string, 0, min(len(groups), maxCount))
+	filtered := make([]string, 0, len(groups))
 	seen := make(map[string]struct{})
 	for _, group := range groups {
 		if !IsUserSelectableGroupForGroups(userGroups, group) {
@@ -126,16 +172,12 @@ func FilterUserTokenAutoGroupsForGroups(userGroups []string, groups []string) []
 		}
 		seen[group] = struct{}{}
 		filtered = append(filtered, group)
-		if len(filtered) == maxCount {
-			break
-		}
 	}
 	return filtered
 }
 
-// GetRequestAutoGroups resolves the ordered Auto groups for the current token.
-// The absence of the context value means that the token inherits the complete
-// global Auto list; a present (even empty) value is an explicit token snapshot.
+// GetRequestAutoGroups resolves the ordered Auto groups saved on the current
+// token. Missing token configuration fails closed.
 func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 	return GetRequestAutoGroupsForGroups(c, []string{userGroup})
 }
@@ -143,7 +185,7 @@ func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 func GetRequestAutoGroupsForGroups(c *gin.Context, userGroups []string) []string {
 	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
 	if !ok {
-		return GetUserAutoGroups(userGroups)
+		return []string{}
 	}
 	groups, ok := value.([]string)
 	if !ok {
