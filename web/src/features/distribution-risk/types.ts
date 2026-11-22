@@ -21,10 +21,14 @@ export type DistributionRiskStatus = 'pending' | 'confirmed' | 'false_positive'
 export type DistributionRiskEventQuery = {
   status: DistributionRiskStatus | 'all'
   level: 'medium' | 'high' | 'all'
-  scope_kind: 'user' | 'token' | 'all'
-  user_id?: number
+  username?: string
   start_timestamp?: number
   end_timestamp?: number
+}
+
+export interface DistributionRiskToken {
+  id: number
+  name: string
 }
 
 export interface DistributionRiskConfig {
@@ -55,9 +59,8 @@ export interface DistributionRiskEvidence {
 export interface DistributionRiskEvent {
   id: number
   user_id: number
-  scope_kind: 'user' | 'token'
-  scope_id: number
-  token_ids: number[]
+  username: string
+  tokens: DistributionRiskToken[]
   score: number
   level: 'medium' | 'high'
   category_scores: Record<string, number> | null

@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, within } from '@testing-library/react'
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
@@ -45,9 +51,8 @@ afterEach(() => {
 const event = (id: number): DistributionRiskEvent => ({
   id,
   user_id: 17,
-  scope_kind: 'token',
-  scope_id: 24,
-  token_ids: [24],
+  username: 'alice',
+  tokens: [{ id: 24, name: 'production' }],
   score: 88,
   level: 'high',
   category_scores: { network: 41, session: 47 },
@@ -94,7 +99,36 @@ describe('risk log listing', () => {
     })
     const user = userEvent.setup()
     renderListing()
-    await screen.findByRole('button', { name: 'Details #42' })
+    await screen.findByRole('button', { name: 'Details' })
+    const main = within(screen.getByRole('main'))
+    expect(main.getByRole('columnheader', { name: 'User' })).toBeVisible()
+    expect(main.getByRole('columnheader', { name: 'Token' })).toBeVisible()
+    expect(main.getByRole('columnheader', { name: 'Risk' })).toBeVisible()
+    expect(main.getByText('Confirmed')).toBeVisible()
+    expect(main.queryByRole('columnheader', { name: 'Status' })).toBeNull()
+    expect(
+      main.queryByRole('columnheader', { name: 'Risk event ID' })
+    ).toBeNull()
+    expect(main.queryByRole('columnheader', { name: 'Scope' })).toBeNull()
+    expect(
+      main.queryByRole('columnheader', { name: 'Review reason' })
+    ).toBeNull()
+    expect(main.getByText('alice')).toBeVisible()
+    expect(main.getByText('production')).toBeVisible()
+    expect(main.queryByText('#17')).not.toBeInTheDocument()
+    expect(
+      main.getByRole('button', { name: /\d{4}-\d{2}-\d{2} 00:00:00 ~/ })
+    ).toBeVisible()
+    expect(listDistributionRiskEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        start_timestamp: expect.any(Number),
+        end_timestamp: expect.any(Number),
+      }),
+      1,
+      20,
+      expect.any(AbortSignal)
+    )
+    expect(main.queryByText('SYNTHETIC DEMO DATA')).not.toBeInTheDocument()
     vi.mocked(listDistributionRiskEvents).mockResolvedValue({
       items: [event(43)],
       total: 1,
@@ -107,12 +141,10 @@ describe('risk log listing', () => {
         name: 'Search',
       })
     )
-    expect(
-      await screen.findByRole('button', { name: 'Details #43' })
-    ).toBeVisible()
+    expect(await screen.findByRole('button', { name: 'Details' })).toBeVisible()
   })
 
-  it('clears stale results after a failed refresh and offers a retry', async () => {
+  it('keeps the last result and pending count after a failed refresh', async () => {
     vi.mocked(listDistributionRiskEvents)
       .mockResolvedValueOnce({
         items: [event(42)],
@@ -124,20 +156,27 @@ describe('risk log listing', () => {
       .mockRejectedValue(new Error('risk listing unavailable'))
     const user = userEvent.setup()
     renderListing()
-    await screen.findByRole('button', { name: 'Details #42' })
+    await screen.findByRole('button', { name: 'Details' })
     await user.click(
       within(screen.getByRole('main')).getByRole('button', {
         name: 'Refresh',
       })
     )
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      'risk listing unavailable'
+    await waitFor(() =>
+      expect(listDistributionRiskEvents).toHaveBeenCalledTimes(2)
     )
+    expect(screen.getByRole('button', { name: 'Details' })).toBeVisible()
+    expect(screen.getByText('Pending: 2')).toBeVisible()
     expect(
-      screen.queryByRole('button', { name: 'Details #42' })
+      screen.queryByText(/distribution risk events are waiting for review/)
     ).not.toBeInTheDocument()
-    expect(screen.queryByText('Pending: 2')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeVisible()
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    expect(
+      screen.queryByText('risk listing unavailable')
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: 'Retry' })
+    ).not.toBeInTheDocument()
   })
 })
 
@@ -163,7 +202,9 @@ describe('risk event details', () => {
       </QueryClientProvider>
     )
 
-    expect(await screen.findByText('Risk event #42')).toBeVisible()
+    expect(
+      await screen.findByRole('heading', { name: 'Risk event' })
+    ).toBeVisible()
     expect(
       await screen.findByText('Detailed evidence has expired after 30 days.')
     ).toBeVisible()
@@ -173,7 +214,7 @@ describe('risk event details', () => {
     )
   })
 
-  it('offers copy actions for investigation identifiers', async () => {
+  it('keeps the event identifier hidden and offers copy actions for useful IDs', async () => {
     vi.mocked(getDistributionRiskEvent).mockResolvedValueOnce(event(42))
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
@@ -193,17 +234,16 @@ describe('risk event details', () => {
     expect(
       await screen.findByRole('button', { name: 'Copy User ID' })
     ).toBeVisible()
-    expect(screen.getByText('Risk event #42')).toBeVisible()
-    expect(
-      screen.getByRole('button', { name: 'Copy Risk event ID' })
-    ).toBeVisible()
-    expect(screen.getByRole('button', { name: 'Copy Scope ID' })).toBeVisible()
-    expect(
-      screen.getByRole('button', { name: 'Copy Contributing tokens' })
-    ).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Copy Token' })).toBeVisible()
     expect(
       screen.getByRole('button', { name: 'Copy Reviewer ID' })
     ).toBeVisible()
+    expect(screen.getByText('Username').parentElement).toHaveTextContent(
+      'alice'
+    )
+    expect(screen.getByText('User ID').parentElement).toHaveTextContent('17')
+    expect(screen.getByText('production (#24)')).toBeVisible()
+    expect(screen.queryByText('Risk event #42')).not.toBeInTheDocument()
   })
 
   it('lets an administrator retry when event details fail to load', async () => {
@@ -227,7 +267,9 @@ describe('risk event details', () => {
     )
 
     await user.click(await screen.findByRole('button', { name: 'Retry' }))
-    expect(await screen.findByText('Risk event #42')).toBeVisible()
+    expect(
+      await screen.findByRole('heading', { name: 'Risk event' })
+    ).toBeVisible()
     expect(getDistributionRiskEvent).toHaveBeenCalledTimes(2)
   })
 })

@@ -31,8 +31,7 @@ import {
 const DEFAULT_FILTERS: DistributionRiskEventDraftFilters = {
   status: 'all',
   level: 'all',
-  scope_kind: 'all',
-  user_id: '',
+  username: '',
 }
 
 function FilterHarness(props: { onSearch: () => void; onReset: () => void }) {
@@ -57,24 +56,23 @@ function FilterHarness(props: { onSearch: () => void; onReset: () => void }) {
 }
 
 describe('distribution risk filters', () => {
-  it('applies an advanced user ID filter and resets it through the shared log toolbar', async () => {
+  it('searches by username and resets it through the shared log toolbar', async () => {
     const user = userEvent.setup()
     const onSearch = vi.fn()
     const onReset = vi.fn()
     render(<FilterHarness onSearch={onSearch} onReset={onReset} />)
 
     await user.click(screen.getByRole('button', { name: 'Expand' }))
-    const userID = await screen.findByRole('spinbutton', {
-      name: 'Search by user ID',
-    })
-    await user.type(userID, '42')
-    expect(userID).toHaveValue(42)
+    const username = await screen.findByRole('textbox', { name: 'Username' })
+    await user.type(username, 'alice')
+    expect(username).toHaveValue('alice')
+    expect(screen.queryByRole('combobox', { name: 'Scope' })).toBeNull()
 
     await user.click(screen.getByRole('button', { name: 'Search' }))
     expect(onSearch).toHaveBeenCalledOnce()
 
     await user.click(screen.getByRole('button', { name: 'Reset' }))
-    expect(userID).toHaveValue(null)
+    expect(username).toHaveValue('')
     expect(onReset).toHaveBeenCalledOnce()
   })
 })

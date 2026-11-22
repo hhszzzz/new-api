@@ -21,12 +21,16 @@ type distributionRiskEvidenceResponse struct {
 	Sessions   []string `json:"session_hashes"`
 }
 
+type distributionRiskTokenResponse struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 type distributionRiskEventResponse struct {
 	ID             int64                             `json:"id"`
 	UserID         int                               `json:"user_id"`
-	ScopeKind      string                            `json:"scope_kind"`
-	ScopeID        int                               `json:"scope_id"`
-	TokenIDs       []int                             `json:"token_ids"`
+	Username       string                            `json:"username"`
+	Tokens         []distributionRiskTokenResponse   `json:"tokens"`
 	Score          int                               `json:"score"`
 	Level          string                            `json:"level"`
 	CategoryScores map[string]int                    `json:"category_scores"`
@@ -143,6 +147,7 @@ func ListDistributionRiskEvents(c *gin.Context) {
 		}
 		filters.UserID = userID
 	}
+	filters.Username = strings.TrimSpace(c.Query("username"))
 	startTimestamp := strings.TrimSpace(c.Query("start_timestamp"))
 	if startTimestamp != "" {
 		parsed, err := strconv.ParseInt(startTimestamp, 10, 64)
@@ -183,9 +188,14 @@ func ListDistributionRiskEvents(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	displayNames, err := model.GetDistributionRiskEventDisplayNames(events)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
 	items := make([]distributionRiskEventResponse, 0, len(events))
 	for index := range events {
-		item, err := distributionRiskEventSummary(&events[index])
+		item, err := distributionRiskEventSummary(&events[index], displayNames)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -208,7 +218,12 @@ func GetDistributionRiskEvent(c *gin.Context) {
 		writeDistributionRiskEventError(c, err)
 		return
 	}
-	response, err := distributionRiskEventSummary(event)
+	displayNames, err := model.GetDistributionRiskEventDisplayNames([]model.DistributionRiskEvent{*event})
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	response, err := distributionRiskEventSummary(event, displayNames)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -267,7 +282,7 @@ func ReviewDistributionRiskEvent(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Distribution risk event reviewed"})
 }
 
-func distributionRiskEventSummary(event *model.DistributionRiskEvent) (distributionRiskEventResponse, error) {
+func distributionRiskEventSummary(event *model.DistributionRiskEvent, displayNames model.DistributionRiskEventDisplayNames) (distributionRiskEventResponse, error) {
 	tokenIDs, err := model.DistributionRiskEventTokenIDs(event)
 	if err != nil {
 		return distributionRiskEventResponse{}, err
@@ -278,9 +293,13 @@ func distributionRiskEventSummary(event *model.DistributionRiskEvent) (distribut
 			return distributionRiskEventResponse{}, err
 		}
 	}
+	tokens := make([]distributionRiskTokenResponse, 0, len(tokenIDs))
+	for _, tokenID := range tokenIDs {
+		tokens = append(tokens, distributionRiskTokenResponse{ID: tokenID, Name: displayNames.TokenNames[tokenID]})
+	}
 	return distributionRiskEventResponse{
-		ID: event.ID, UserID: event.UserID, ScopeKind: event.ScopeKind, ScopeID: event.ScopeID,
-		TokenIDs: tokenIDs, Score: event.Score,
+		ID: event.ID, UserID: event.UserID, Username: displayNames.Usernames[event.UserID], Tokens: tokens,
+		Score: event.Score,
 		Level: event.Level, CategoryScores: categories, Status: event.Status, CreatedAt: event.CreatedAt,
 		ReviewedAt: event.ReviewedAt, ReviewerID: event.ReviewerID, ReviewReason: event.ReviewReason,
 	}, nil

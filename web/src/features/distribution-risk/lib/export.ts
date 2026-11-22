@@ -2,6 +2,7 @@ import { downloadCsv, toCsvLine } from '@/features/usage-logs/lib/export'
 import { formatTimestampToDate } from '@/lib/format'
 
 import type { DistributionRiskEvent, DistributionRiskEventList } from '../types'
+import { distributionRiskTokenLabel } from './format'
 
 type Translate = (key: string) => string
 type FetchPage = (
@@ -14,12 +15,9 @@ const EXPORT_PAGE_SIZE = 100
 
 function csvHeader(t: Translate): string[] {
   return [
-    t('Risk event ID'),
     t('Observed at'),
-    t('User ID'),
-    t('Scope'),
-    t('Scope ID'),
-    t('Contributing tokens'),
+    t('User'),
+    t('Token'),
     t('Risk score'),
     t('Risk level'),
     t('Status'),
@@ -89,12 +87,11 @@ export function buildDistributionRiskCsv(
       .join('; ')
     lines.push(
       toCsvLine([
-        String(event.id),
         formatTimestampToDate(event.created_at),
-        String(event.user_id),
-        t(event.scope_kind === 'user' ? 'User account' : 'Token'),
-        String(event.scope_id),
-        (event.token_ids ?? []).join(', '),
+        event.username || '',
+        event.tokens
+          .map((token) => distributionRiskTokenLabel(token, true))
+          .join(', '),
         String(event.score),
         t(event.level === 'high' ? 'High' : 'Medium'),
         t(statusLabel(event.status)),

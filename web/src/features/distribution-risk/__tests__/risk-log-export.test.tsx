@@ -62,9 +62,8 @@ afterEach(() => {
 const event = (id: number): DistributionRiskEvent => ({
   id,
   user_id: 17,
-  scope_kind: 'token',
-  scope_id: 24,
-  token_ids: [24],
+  username: 'alice',
+  tokens: [{ id: 24, name: 'production' }],
   score: 88,
   level: 'high',
   category_scores: { network: 41, session: 47 },
@@ -129,15 +128,20 @@ describe('risk log export data', () => {
     expect(onProgress.mock.calls.map(([count]) => count)).toEqual([2, 3])
   })
 
-  it('exports review details while excluding client fingerprints and spreadsheet formulas', () => {
+  it('exports concise log fields while excluding event IDs and client fingerprints', () => {
     const lines = buildDistributionRiskCsv([event(42)], (key) => key)
     const csv = lines.join('')
 
-    expect(lines[0]).toContain('"Risk event ID"')
-    expect(lines[0]).toContain('"Scope ID"')
+    expect(lines[0]).not.toContain('"Risk event ID"')
+    expect(lines[0]).not.toContain('"Scope"')
+    expect(lines[0]).toContain('"User"')
+    expect(lines[0]).toContain('"Token"')
     expect(lines[0]).toContain('"Reviewed at"')
     expect(lines[0]).toContain('"Reviewer ID"')
-    expect(csv).toContain('"42"')
+    expect(csv).toContain('"alice"')
+    expect(csv).toContain('"production (#24)"')
+    expect(csv).not.toContain('"42"')
+    expect(csv).not.toContain('"17"')
     expect(csv).toContain("'=HYPERLINK")
     expect(csv).not.toContain('198.51.100.25')
     expect(csv).not.toContain('synthetic-browser')
@@ -163,8 +167,7 @@ describe('risk log export dialog', () => {
         filters={{
           status: 'pending',
           level: 'high',
-          scope_kind: 'token',
-          user_id: 17,
+          username: 'alice',
           start_timestamp: startTimestamp,
           end_timestamp: endTimestamp,
         }}
@@ -180,8 +183,7 @@ describe('risk log export dialog', () => {
       expect.objectContaining({
         status: 'pending',
         level: 'high',
-        scope_kind: 'token',
-        user_id: 17,
+        username: 'alice',
         start_timestamp: startTimestamp,
         end_timestamp: endTimestamp,
       }),
@@ -191,7 +193,7 @@ describe('risk log export dialog', () => {
     )
     const blob = createObjectURL.mock.calls[0][0]
     const csv = await blob.text()
-    expect(csv).toContain('"42"')
+    expect(csv).toContain('"alice"')
     expect(csv).toContain('"\'=HYPERLINK')
     expect(csv).not.toContain('198.51.100.25')
   })
@@ -205,7 +207,7 @@ describe('risk log export dialog', () => {
         filters={{
           status: 'all',
           level: 'all',
-          scope_kind: 'all',
+          username: '',
           start_timestamp: endTimestamp - 366 * 24 * 60 * 60,
           end_timestamp: endTimestamp,
         }}

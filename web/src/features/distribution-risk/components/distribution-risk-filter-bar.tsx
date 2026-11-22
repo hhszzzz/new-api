@@ -32,8 +32,7 @@ import type { DistributionRiskEvent } from '../types'
 export type DistributionRiskEventDraftFilters = {
   status: 'all' | 'pending' | 'confirmed' | 'false_positive'
   level: 'all' | 'medium' | 'high'
-  scope_kind: 'all' | 'user' | 'token'
-  user_id: string
+  username: string
   start_timestamp?: number
   end_timestamp?: number
 }
@@ -124,33 +123,15 @@ export function DistributionRiskFilterBar(props: {
           })
         }
       />
-      <RiskFilterSelect
-        label={t('Scope')}
-        value={props.filters.scope_kind}
-        options={[
-          { value: 'all', label: t('All scopes') },
-          { value: 'user', label: t('User account') },
-          { value: 'token', label: t('Token') },
-        ]}
-        onChange={(value) =>
-          props.onChange({
-            scope_kind:
-              value as DistributionRiskEventDraftFilters['scope_kind'],
-          })
-        }
-      />
     </>
   )
   const advancedFilters = (
     <LogsFilterField>
       <LogsFilterInput
-        type='number'
-        min={1}
-        step={1}
-        aria-label={t('Search by user ID')}
-        placeholder={t('Search by user ID')}
-        value={props.filters.user_id}
-        onChange={(event) => props.onChange({ user_id: event.target.value })}
+        aria-label={t('Username')}
+        placeholder={t('Username')}
+        value={props.filters.username}
+        onChange={(event) => props.onChange({ username: event.target.value })}
       />
     </LogsFilterField>
   )
@@ -160,14 +141,12 @@ export function DistributionRiskFilterBar(props: {
   const hasActiveFilters =
     props.filters.status !== 'all' ||
     props.filters.level !== 'all' ||
-    props.filters.scope_kind !== 'all' ||
-    props.filters.user_id !== '' ||
+    props.filters.username.trim() !== '' ||
     hasDateFilter
   const filterCount =
     Number(props.filters.status !== 'all') +
     Number(props.filters.level !== 'all') +
-    Number(props.filters.scope_kind !== 'all') +
-    Number(props.filters.user_id !== '') +
+    Number(props.filters.username.trim() !== '') +
     Number(hasDateFilter)
 
   return (
@@ -188,9 +167,9 @@ export function DistributionRiskFilterBar(props: {
         </>
       }
       mobileFilterCount={filterCount}
-      advancedFilterCount={Number(props.filters.user_id !== '')}
+      advancedFilterCount={Number(props.filters.username.trim() !== '')}
       hasActiveFilters={hasActiveFilters}
-      hasAdvancedActiveFilters={props.filters.user_id !== ''}
+      hasAdvancedActiveFilters={props.filters.username.trim() !== ''}
       searchLoading={props.isFetching}
       onSearch={props.onSearch}
       onReset={props.onReset}

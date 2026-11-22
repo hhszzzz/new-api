@@ -36,6 +36,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { formatTimestampToDate } from '@/lib/format'
 
 import { getDistributionRiskEvent, reviewDistributionRiskEvent } from '../api'
+import { distributionRiskTokenLabel } from '../lib/format'
 import type { DistributionRiskEvent, DistributionRiskEvidence } from '../types'
 
 type Props = {
@@ -89,25 +90,14 @@ export function DistributionRiskEventDialog(props: Props) {
       <Dialog open={isOpen} onOpenChange={props.onOpenChange}>
         <DialogContent className='sm:max-w-3xl'>
           <DialogHeader>
-            <DialogTitle className='flex items-center gap-2'>
-              <span>
-                {t('Risk event')} #{event?.id ?? props.eventID}
-              </span>
-              {event && (
-                <CopyButton
-                  value={String(event.id)}
-                  className='size-6'
-                  iconClassName='size-3.5'
-                  tooltip={t('Copy {{field}}', { field: t('Risk event ID') })}
-                  aria-label={t('Copy {{field}}', {
-                    field: t('Risk event ID'),
-                  })}
-                />
-              )}
-            </DialogTitle>
-            <DialogDescription>
-              {t('Review the evidence and record a reason for your decision.')}
-            </DialogDescription>
+            <DialogTitle>{t('Risk event')}</DialogTitle>
+            {canReview && (
+              <DialogDescription>
+                {t(
+                  'Review the evidence and record a reason for your decision.'
+                )}
+              </DialogDescription>
+            )}
           </DialogHeader>
           {detailQuery.isLoading && (
             <p className='text-muted-foreground py-6 text-sm'>
@@ -194,6 +184,7 @@ function EventDetail(props: {
   return (
     <div className='max-h-[70dvh] space-y-5 overflow-y-auto pr-1'>
       <div className='grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4'>
+        <Fact label={t('Username')} value={event.username || '—'} />
         <Fact
           label={t('User ID')}
           value={String(event.user_id)}
@@ -201,21 +192,24 @@ function EventDetail(props: {
           copyLabel={t('Copy {{field}}', { field: t('User ID') })}
         />
         <Fact
-          label={t('Scope')}
-          value={`${event.scope_kind === 'user' ? t('User account') : t('Token')} ${event.scope_id}`}
-          copyValue={String(event.scope_id)}
-          copyLabel={t('Copy {{field}}', { field: t('Scope ID') })}
+          label={t('Risk')}
+          value={`${event.score} (${t(event.level === 'high' ? 'High' : 'Medium')})`}
         />
-        <Fact label={t('Risk score')} value={String(event.score)} />
         <Fact
           label={t('Observed at')}
           value={formatTimestampToDate(event.created_at)}
         />
         <Fact
-          label={t('Contributing tokens')}
-          value={event.token_ids.join(', ') || '-'}
-          copyValue={event.token_ids.join(', ')}
-          copyLabel={t('Copy {{field}}', { field: t('Contributing tokens') })}
+          label={t('Token')}
+          value={
+            event.tokens
+              .map((token) => distributionRiskTokenLabel(token, true))
+              .join(', ') || '-'
+          }
+          copyValue={event.tokens
+            .map((token) => distributionRiskTokenLabel(token, true))
+            .join(', ')}
+          copyLabel={t('Copy {{field}}', { field: t('Token') })}
         />
         <Fact label={t('Status')} value={statusLabel(event.status, t)} />
         {event.reviewed_at > 0 && (

@@ -31,6 +31,7 @@ import { SectionPageLayout } from '@/components/layout'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { getDefaultTimeRange } from '@/features/usage-logs/lib/utils'
 import {
   ADMIN_PERMISSION_ACTIONS,
   ADMIN_PERMISSION_RESOURCES,
@@ -51,11 +52,15 @@ import type { DistributionRiskEvent, DistributionRiskEventQuery } from './types'
 
 const TABLE_STATE_KEY = 'distribution-risk:events'
 const EMPTY_EVENTS: DistributionRiskEvent[] = []
-const DEFAULT_FILTERS: DistributionRiskEventDraftFilters = {
-  status: 'all',
-  level: 'all',
-  scope_kind: 'all',
-  user_id: '',
+function createDefaultFilters(): DistributionRiskEventDraftFilters {
+  const { start, end } = getDefaultTimeRange()
+  return {
+    status: 'all',
+    level: 'all',
+    username: '',
+    start_timestamp: Math.floor(start.getTime() / 1000),
+    end_timestamp: Math.floor(end.getTime() / 1000),
+  }
 }
 
 export function DistributionRiskPage() {
@@ -71,10 +76,9 @@ export function DistributionRiskPage() {
     ADMIN_PERMISSION_RESOURCES.DISTRIBUTION_RISK,
     ADMIN_PERMISSION_ACTIONS.MANAGE
   )
-  const [draftFilters, setDraftFilters] =
-    useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
-  const [appliedFilters, setAppliedFilters] =
-    useState<DistributionRiskEventDraftFilters>(DEFAULT_FILTERS)
+  const [initialFilters] = useState(createDefaultFilters)
+  const [draftFilters, setDraftFilters] = useState(initialFilters)
+  const [appliedFilters, setAppliedFilters] = useState(initialFilters)
   const [pagination, setPagination] = useState(() => ({
     pageIndex: 0,
     pageSize: getInitialTablePageSize(TABLE_STATE_KEY, 20),
@@ -86,24 +90,14 @@ export function DistributionRiskPage() {
     draftFilters.start_timestamp !== undefined &&
     draftFilters.end_timestamp !== undefined &&
     draftFilters.start_timestamp > draftFilters.end_timestamp
-  const invalidUserID =
-    appliedFilters.user_id !== '' &&
-    (!/^\d+$/.test(appliedFilters.user_id) ||
-      !Number.isSafeInteger(Number(appliedFilters.user_id)) ||
-      Number(appliedFilters.user_id) <= 0)
-  const invalidDraftUserID =
-    draftFilters.user_id !== '' &&
-    (!/^\d+$/.test(draftFilters.user_id) ||
-      !Number.isSafeInteger(Number(draftFilters.user_id)) ||
-      Number(draftFilters.user_id) <= 0)
-
   const queryFilters = useMemo<DistributionRiskEventQuery>(() => {
     const filters: DistributionRiskEventQuery = {
       status: appliedFilters.status,
       level: appliedFilters.level,
-      scope_kind: appliedFilters.scope_kind,
     }
-    if (appliedFilters.user_id) filters.user_id = Number(appliedFilters.user_id)
+    if (appliedFilters.username.trim()) {
+      filters.username = appliedFilters.username.trim()
+    }
     if (appliedFilters.start_timestamp !== undefined) {
       filters.start_timestamp = appliedFilters.start_timestamp
     }
@@ -128,28 +122,23 @@ export function DistributionRiskPage() {
         pagination.pageSize,
         signal
       ),
-    enabled: canRead && !invalidUserID,
+    enabled: canRead,
     refetchInterval: 60_000,
+    meta: { errorToast: false },
   })
-  const hasEventsError = eventsQuery.error !== null
-  const pendingCount =
-    hasEventsError || invalidUserID ? 0 : (eventsQuery.data?.pending_count ?? 0)
+  const pendingCount = eventsQuery.data?.pending_count ?? 0
 
   const openDetails = useCallback((id: number) => setEventID(id), [])
   const columns = useDistributionRiskEventColumns(openDetails)
   const { table } = useDataTable({
     columns,
     tableStateStorageKey: TABLE_STATE_KEY,
-    data:
-      canRead && !hasEventsError && !invalidUserID
-        ? (eventsQuery.data?.items ?? EMPTY_EVENTS)
-        : EMPTY_EVENTS,
+    data: canRead ? (eventsQuery.data?.items ?? EMPTY_EVENTS) : EMPTY_EVENTS,
     getRowId: (event) => String(event.id),
-    totalCount:
-      hasEventsError || invalidUserID ? 0 : (eventsQuery.data?.total ?? 0),
+    totalCount: eventsQuery.data?.total ?? 0,
     pagination,
     onPaginationChange: (updater) => {
-      if (eventsQuery.isFetching || hasEventsError || invalidUserID) return
+      if (eventsQuery.isFetching) return
       setPagination((current) => {
         const next = typeof updater === 'function' ? updater(current) : updater
         if (next.pageSize === current.pageSize) {
@@ -162,7 +151,7 @@ export function DistributionRiskPage() {
       })
     },
     ensurePageInRange: (pageCount) => {
-      if (!eventsQuery.isSuccess || eventsQuery.isFetching || invalidUserID) {
+      if (!eventsQuery.isSuccess || eventsQuery.isFetching) {
         return
       }
       setPagination((current) =>
@@ -181,7 +170,7 @@ export function DistributionRiskPage() {
     setDraftFilters((current) => ({ ...current, ...patch }))
 
   const applyFilters = () => {
-    if (invalidDateRange || invalidDraftUserID) return
+    if (invalidDateRange) return
     if (
       pagination.pageIndex === 0 &&
       JSON.stringify(draftFilters) === JSON.stringify(appliedFilters)
@@ -194,8 +183,9 @@ export function DistributionRiskPage() {
   }
 
   const resetFilters = () => {
-    setDraftFilters(DEFAULT_FILTERS)
-    setAppliedFilters(DEFAULT_FILTERS)
+    const filters = createDefaultFilters()
+    setDraftFilters(filters)
+    setAppliedFilters(filters)
     setPagination((current) => ({ ...current, pageIndex: 0 }))
   }
 
@@ -228,35 +218,6 @@ export function DistributionRiskPage() {
       </SectionPageLayout.Actions>
       <SectionPageLayout.Content>
         <div className='flex h-full min-h-0 flex-col gap-3'>
-          {canRead && pendingCount > 0 && (
-            <div
-              className='border-warning/40 bg-warning/10 flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2.5'
-              role='status'
-            >
-              <p className='text-sm'>
-                {t(
-                  '{{count}} distribution risk events are waiting for review.',
-                  { count: pendingCount }
-                )}
-              </p>
-              <Button
-                size='sm'
-                variant='outline'
-                onClick={() => {
-                  const next = {
-                    ...DEFAULT_FILTERS,
-                    status: 'pending' as const,
-                  }
-                  setDraftFilters(next)
-                  setAppliedFilters(next)
-                  setPagination((current) => ({ ...current, pageIndex: 0 }))
-                }}
-              >
-                {t('Review pending')}
-              </Button>
-            </div>
-          )}
-
           {invalidDateRange && (
             <Alert variant='destructive'>
               <AlertDescription>
@@ -264,40 +225,13 @@ export function DistributionRiskPage() {
               </AlertDescription>
             </Alert>
           )}
-          {invalidDraftUserID && (
-            <Alert variant='destructive'>
-              <AlertDescription>{t('Enter a valid user ID')}</AlertDescription>
-            </Alert>
-          )}
-          {eventsQuery.isError && (
-            <Alert variant='destructive'>
-              <AlertDescription className='flex items-center justify-between gap-3'>
-                <span>
-                  {eventsQuery.error.message || t('Failed to load risk events')}
-                </span>
-                <Button
-                  type='button'
-                  size='sm'
-                  variant='outline'
-                  onClick={() => void eventsQuery.refetch()}
-                >
-                  {t('Retry')}
-                </Button>
-              </AlertDescription>
-            </Alert>
-          )}
-
           {canRead ? (
             <DataTablePage
               table={table}
               columns={columns}
-              isLoading={eventsQuery.isPending && !invalidUserID}
+              isLoading={eventsQuery.isPending}
               isFetching={eventsQuery.isFetching}
-              emptyTitle={
-                hasEventsError
-                  ? t('Failed to load risk events')
-                  : t('No risk events')
-              }
+              emptyTitle={t('No risk events')}
               className='h-auto min-h-0 flex-1'
               pinnedColumns={[{ columnId: 'details', side: 'right' }]}
               applyHeaderSize

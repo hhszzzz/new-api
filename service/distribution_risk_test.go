@@ -111,13 +111,15 @@ func TestDistributionRiskPersistenceDatabaseMatrix(t *testing.T) {
 				model.DB = previousDB
 				common.SetMainDatabaseType(previousDatabaseType)
 				common.RedisEnabled = previousRedisEnabled
-				assert.NoError(t, db.Migrator().DropTable(&model.DistributionRiskHold{}, &model.DistributionRiskEvent{}, &model.Token{}))
+				assert.NoError(t, db.Migrator().DropTable(&model.DistributionRiskHold{}, &model.DistributionRiskEvent{}, &model.Token{}, &model.User{}))
 				assert.NoError(t, sqlDB.Close())
 			})
 
-			// Token rows stand in for the schema and data already present before this feature.
-			require.NoError(t, db.AutoMigrate(&model.Token{}))
-			token := model.Token{Id: 41, UserId: 7, Key: "distribution-risk-matrix-token", Status: common.TokenStatusEnabled, ExpiredTime: -1}
+			// User and token rows stand in for the records referenced by risk events.
+			require.NoError(t, db.AutoMigrate(&model.User{}, &model.Token{}))
+			user := model.User{Id: 7, Username: "matrix-user", Password: "matrix-password"}
+			require.NoError(t, db.Create(&user).Error)
+			token := model.Token{Id: 41, UserId: user.Id, Key: "distribution-risk-matrix-token", Name: "matrix-token", Status: common.TokenStatusEnabled, ExpiredTime: -1}
 			require.NoError(t, db.Create(&token).Error)
 			require.NoError(t, db.AutoMigrate(&model.DistributionRiskEvent{}, &model.DistributionRiskHold{}))
 			require.NoError(t, db.AutoMigrate(&model.DistributionRiskEvent{}, &model.DistributionRiskHold{}), "repeated migration must be idempotent")
@@ -141,11 +143,15 @@ func TestDistributionRiskPersistenceDatabaseMatrix(t *testing.T) {
 			require.NoError(t, model.CreateDistributionRiskEvent(falsePositive, true, []int{41}))
 			secondIncident := &model.DistributionRiskEvent{UserID: 7, ScopeKind: "token", Score: 90, Level: "high", Evidence: `{"ips":["192.0.2.2"]}`}
 			require.NoError(t, model.CreateDistributionRiskEvent(secondIncident, true, []int{41}))
+			displayNames, err := model.GetDistributionRiskEventDisplayNames([]model.DistributionRiskEvent{*secondIncident})
+			require.NoError(t, err)
+			assert.Equal(t, "matrix-user", displayNames.Usernames[user.Id])
+			assert.Equal(t, "matrix-token", displayNames.TokenNames[token.Id])
 			filteredEvents, filteredTotal, err := model.ListDistributionRiskEvents(model.DistributionRiskEventFilters{
 				Status:    model.DistributionRiskPending,
 				Level:     "high",
 				ScopeKind: "token",
-				UserID:    7,
+				Username:  "matrix",
 				StartTime: secondIncident.CreatedAt - 1,
 				EndTime:   secondIncident.CreatedAt + 1,
 			}, 0, 20)

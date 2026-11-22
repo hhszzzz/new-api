@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -81,8 +82,14 @@ type DistributionRiskEventFilters struct {
 	Level     string
 	ScopeKind string
 	UserID    int
+	Username  string
 	StartTime int64
 	EndTime   int64
+}
+
+type DistributionRiskEventDisplayNames struct {
+	Usernames  map[int]string
+	TokenNames map[int]string
 }
 
 // DistributionRiskHold keeps a high-risk token blocked until an administrator
@@ -167,6 +174,10 @@ func ListDistributionRiskEvents(filters DistributionRiskEventFilters, offset, li
 	if filters.UserID > 0 {
 		query = query.Where("user_id = ?", filters.UserID)
 	}
+	if filters.Username != "" {
+		userIDs := DB.Model(&User{}).Select("id").Where("username LIKE ?", "%"+filters.Username+"%")
+		query = query.Where("user_id IN (?)", userIDs)
+	}
 	if filters.StartTime > 0 {
 		query = query.Where("created_at >= ?", filters.StartTime)
 	}
@@ -182,6 +193,65 @@ func ListDistributionRiskEvents(filters DistributionRiskEventFilters, offset, li
 		return nil, 0, err
 	}
 	return events, total, nil
+}
+
+func GetDistributionRiskEventDisplayNames(events []DistributionRiskEvent) (DistributionRiskEventDisplayNames, error) {
+	names := DistributionRiskEventDisplayNames{
+		Usernames:  make(map[int]string),
+		TokenNames: make(map[int]string),
+	}
+	if DB == nil {
+		return names, errors.New("main database is not initialized")
+	}
+
+	userIDs := make([]int, 0, len(events))
+	seenUserIDs := make(map[int]struct{}, len(events))
+	tokenIDs := make([]int, 0, len(events))
+	seenTokenIDs := make(map[int]struct{})
+	for index := range events {
+		if userID := events[index].UserID; userID > 0 {
+			if _, exists := seenUserIDs[userID]; !exists {
+				userIDs = append(userIDs, userID)
+				seenUserIDs[userID] = struct{}{}
+			}
+		}
+		ids, err := DistributionRiskEventTokenIDs(&events[index])
+		if err != nil {
+			return names, err
+		}
+		for _, tokenID := range ids {
+			if tokenID <= 0 {
+				continue
+			}
+			if _, exists := seenTokenIDs[tokenID]; !exists {
+				tokenIDs = append(tokenIDs, tokenID)
+				seenTokenIDs[tokenID] = struct{}{}
+			}
+		}
+	}
+	slices.Sort(userIDs)
+	slices.Sort(tokenIDs)
+
+	for chunk := range slices.Chunk(userIDs, 500) {
+		var users []User
+		if err := DB.Model(&User{}).Select("id", "username").Where("id IN ?", chunk).Find(&users).Error; err != nil {
+			return names, fmt.Errorf("load distribution risk usernames: %w", err)
+		}
+		for _, user := range users {
+			names.Usernames[user.Id] = user.Username
+		}
+	}
+	for chunk := range slices.Chunk(tokenIDs, 500) {
+		var tokens []Token
+		if err := DB.Model(&Token{}).Select("id", "name").Where("id IN ?", chunk).Find(&tokens).Error; err != nil {
+			return names, fmt.Errorf("load distribution risk token names: %w", err)
+		}
+		for _, token := range tokens {
+			names.TokenNames[token.Id] = token.Name
+		}
+	}
+
+	return names, nil
 }
 
 func CountPendingDistributionRiskEvents() (int64, error) {
