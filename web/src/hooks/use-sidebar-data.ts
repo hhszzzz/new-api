@@ -124,6 +124,15 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
             url: '/usage-logs/common',
             icon: FileText,
           },
+          ...(canReadDistributionRisk || canManageDistributionRisk
+            ? [
+                {
+                  title: t('Risk logs'),
+                  url: '/distribution-risk',
+                  icon: ShieldAlert,
+                },
+              ]
+            : []),
           ...(canReadPromptAudit || canManagePromptAudit
             ? [
                 {
@@ -224,15 +233,6 @@ export function useSidebarData(badges: SidebarBadges = {}): SidebarData {
             url: '/subscriptions',
             icon: CreditCard,
           },
-          ...(canReadDistributionRisk || canManageDistributionRisk
-            ? [
-                {
-                  title: t('Distribution risk logs'),
-                  url: '/distribution-risk',
-                  icon: ShieldAlert,
-                },
-              ]
-            : []),
           {
             title: t('System Info'),
             url: '/system-info',

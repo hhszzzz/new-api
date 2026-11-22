@@ -233,7 +233,7 @@ describe('audit log sidebar entry', () => {
 })
 
 describe('prompt audit sidebar entry', () => {
-  it('places the entry between logs and audit logs', () => {
+  it('places the entry between risk logs and audit logs', () => {
     const { result } = sidebarFor(undefined, undefined, true, {
       role: ROLE.SUPER_ADMIN,
     })
@@ -242,8 +242,9 @@ describe('prompt audit sidebar entry', () => {
     const logsIndex = titles.indexOf('Logs')
 
     expect(logsIndex).toBeGreaterThanOrEqual(0)
-    expect(titles.slice(logsIndex, logsIndex + 3)).toEqual([
+    expect(titles.slice(logsIndex, logsIndex + 4)).toEqual([
       'Logs',
+      'Risk logs',
       'Prompt audit',
       'Audit Logs',
     ])
@@ -296,10 +297,16 @@ describe('distribution risk sidebar entry', () => {
         },
       })
 
-      const riskItem = result.current
-        .flatMap((group) => group.items)
-        .find((item) => item.title === 'Distribution risk logs')
-      expect(riskItem).toMatchObject({ url: '/distribution-risk' })
+      const generalItems =
+        result.current.find((group) => group.id === 'general')?.items ?? []
+      const adminItems =
+        result.current.find((group) => group.id === 'admin')?.items ?? []
+      expect(
+        generalItems.find((item) => item.title === 'Risk logs')
+      ).toMatchObject({ url: '/distribution-risk' })
+      expect(adminItems.some((item) => item.url === '/distribution-risk')).toBe(
+        false
+      )
     }
   )
 
@@ -310,7 +317,7 @@ describe('distribution risk sidebar entry', () => {
     expect(
       result.current
         .flatMap((group) => group.items)
-        .some((item) => item.title === 'Distribution risk logs')
+        .some((item) => item.title === 'Risk logs')
     ).toBe(false)
   })
 })

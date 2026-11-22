@@ -164,9 +164,7 @@ export function DistributionRiskPage() {
 
   return (
     <SectionPageLayout>
-      <SectionPageLayout.Title>
-        {t('Distribution risk logs')}
-      </SectionPageLayout.Title>
+      <SectionPageLayout.Title>{t('Risk logs')}</SectionPageLayout.Title>
       <SectionPageLayout.Actions>
         {(eventsQuery.data?.pending_count ?? 0) > 0 && (
           <Badge variant='warning'>
@@ -208,7 +206,10 @@ export function DistributionRiskPage() {
                 size='sm'
                 variant='outline'
                 onClick={() => {
-                  const next = { ...DEFAULT_FILTERS, status: 'pending' as const }
+                  const next = {
+                    ...DEFAULT_FILTERS,
+                    status: 'pending' as const,
+                  }
                   setDraftFilters(next)
                   setAppliedFilters(next)
                   setPagination((current) => ({ ...current, pageIndex: 0 }))

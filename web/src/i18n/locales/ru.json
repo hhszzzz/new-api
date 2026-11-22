@@ -6833,6 +6833,7 @@
     "Risk event": "Событие риска",
     "Risk events": "События риска",
     "Risk level": "Уровень риска",
+    "Risk logs": "Журнал рисков",
     "Risk matches return 403 and audit failures return 503.": "При обнаружении риска возвращается 403, при сбое аудита — 503.",
     "Risk score": "Оценка риска",
     "Role": "Роль",
