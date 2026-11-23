@@ -278,7 +278,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 	if !forcedPing {
 		pingInterval = time.Duration(generalSettings.PingIntervalSeconds) * time.Second
 	}
-	pingEnabled := !info.DisablePing && (generalSettings.PingIntervalEnabled || forcedPing)
+	pingEnabled := !info.DisablePing && !clientRejectsSSEComments(c) && (generalSettings.PingIntervalEnabled || forcedPing)
 	if pingInterval <= 0 {
 		pingInterval = DefaultPingInterval
 	}

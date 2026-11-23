@@ -580,6 +580,62 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	assert.Equal(t, 0, pingCount, "pings should be disabled when DisablePing=true")
 }
 
+func TestPingDataSkipsSSECommentForGoogleGenAISDK(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		header     string
+		clientHint string
+		path       string
+		wantPing   bool
+	}{
+		{name: "Go SDK user agent", header: "User-Agent", clientHint: "google-genai-sdk/1.71.0 gl-go/go1.28"},
+		{name: "Go SDK client header", header: "X-Goog-Api-Client", clientHint: "google-genai-sdk/1.71.0 gl-go/go1.28"},
+		{name: "Python SDK", header: "User-Agent", clientHint: "google-genai-sdk/1.20.0 gl-python/3.12.4"},
+		{name: "JS SDK 1.32 accepts comments", header: "User-Agent", clientHint: "google-genai-sdk/1.32.0 gl-node/22.3.0", wantPing: true},
+		{name: "ordinary client", header: "User-Agent", clientHint: "curl/8.7.1", wantPing: true},
+		{name: "Go SDK on another endpoint", header: "User-Agent", clientHint: "google-genai-sdk/1.71.0 gl-go/go1.28", path: "/v1/chat/completions", wantPing: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			path := test.path
+			if path == "" {
+				path = "/v1beta/models/gemini-4-neon:streamGenerateContent"
+			}
+			c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+			c.Request.Header.Set(test.header, test.clientHint)
+
+			require.NoError(t, PingData(c))
+			if test.wantPing {
+				require.Equal(t, ": PING\n\n", recorder.Body.String())
+			} else {
+				require.Empty(t, recorder.Body.String(), "the client cannot parse SSE comment heartbeats")
+			}
+		})
+	}
+}
+
+func TestStreamScannerHandler_DoesNotCommitForGoogleGenAIHeartbeat(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = pw.Close()
+	}()
+
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-4-neon:streamGenerateContent", nil)
+	c.Request.Header.Set("X-Goog-Api-Client", "google-genai-sdk/1.71.0 gl-go/go1.28")
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+
+	StreamScannerHandlerWithOptions(c, &http.Response{Body: pr}, info, StreamScannerOptions{
+		PingInterval: 5 * time.Millisecond,
+	}, func(data string, sr *StreamResult) {})
+
+	require.Empty(t, recorder.Body.String())
+	require.False(t, info.StreamStatus.Snapshot().ResponseCommitted, "a suppressed heartbeat must not commit the stream")
+}
+
 func TestStreamScannerHandler_OptionForcesPingWhenGlobalSettingDisabled(t *testing.T) {
 	setting := operation_setting.GetGeneralSetting()
 	t.Cleanup(func() {

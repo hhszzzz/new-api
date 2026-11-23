@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +23,25 @@ import (
 const responsesLastSequenceNumberKey = "responses_last_sequence_number"
 
 const streamWriteMutexKey = "stream_write_mutex"
+
+func clientRejectsSSEComments(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	path := strings.ToLower(c.Request.URL.Path)
+	if !strings.Contains(path, "/v1beta/models/") || !strings.HasSuffix(path, ":streamgeneratecontent") {
+		return false
+	}
+
+	for _, clientHint := range []string{c.GetHeader("User-Agent"), c.GetHeader("X-Goog-Api-Client")} {
+		hint := strings.ToLower(clientHint)
+		if strings.Contains(hint, "google-genai-sdk/") &&
+			(strings.Contains(hint, "gl-go/") || strings.Contains(hint, "gl-python/")) {
+			return true
+		}
+	}
+	return false
+}
 
 type streamKeepAliveWriter struct {
 	gin.ResponseWriter
@@ -408,9 +428,13 @@ func PingData(c *gin.Context) error {
 	if c == nil || c.Writer == nil {
 		return errors.New("context or writer is nil")
 	}
-
 	if requestContextDone(c) {
 		return fmt.Errorf("request context done: %w", c.Request.Context().Err())
+	}
+	// Current go-genai and python-genai stream parsers reject valid SSE
+	// comment heartbeats. Avoid terminating those clients' streams on a ping.
+	if clientRejectsSSEComments(c) {
+		return nil
 	}
 	return withStreamWriteLock(c, func() error {
 		if _, err := c.Writer.Write([]byte(": PING\n\n")); err != nil {
