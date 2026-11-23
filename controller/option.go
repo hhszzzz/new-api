@@ -146,10 +146,13 @@ type OptionBatchUpdateRequest struct {
 }
 
 type GroupRateLimitOptionsRequest struct {
-	MemberEnabled              *bool                                           `json:"member_enabled"`
-	SharedPoolEnabled          *bool                                           `json:"shared_pool_enabled"`
-	ModelRequestRateLimitGroup map[string][2]int                               `json:"model_request_rate_limit_group"`
-	Policies                   map[string]group_rate_limit_setting.GroupPolicy `json:"policies"`
+	MemberEnabled                  *bool                                           `json:"member_enabled"`
+	SharedPoolEnabled              *bool                                           `json:"shared_pool_enabled"`
+	ModelRequestRateLimitGroup     map[string][2]int                               `json:"model_request_rate_limit_group"`
+	Policies                       map[string]group_rate_limit_setting.GroupPolicy `json:"policies"`
+	RegistrationCodeRequired       *bool                                           `json:"registration_code_required"`
+	DefaultNewUserRPMLimit         *int                                            `json:"default_new_user_rpm"`
+	DefaultNewUserConcurrencyLimit *int                                            `json:"default_new_user_concurrency"`
 }
 
 func normalizeOptionValue(value any) string {
@@ -630,11 +633,27 @@ func UpdateGroupRateLimitOptions(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgOptionGroupRateLimitIncomplete)
 		return
 	}
+	settings := group_rate_limit_setting.NewUserSettings{}
+	if current := group_rate_limit_setting.GetSettingSnapshot(); current != nil {
+		settings.RegistrationCodeRequired = current.RegistrationCodeRequired
+		settings.DefaultNewUserRPMLimit = current.DefaultNewUserRPMLimit
+		settings.DefaultNewUserConcurrencyLimit = current.DefaultNewUserConcurrencyLimit
+	}
+	if request.RegistrationCodeRequired != nil {
+		settings.RegistrationCodeRequired = *request.RegistrationCodeRequired
+	}
+	if request.DefaultNewUserRPMLimit != nil {
+		settings.DefaultNewUserRPMLimit = *request.DefaultNewUserRPMLimit
+	}
+	if request.DefaultNewUserConcurrencyLimit != nil {
+		settings.DefaultNewUserConcurrencyLimit = *request.DefaultNewUserConcurrencyLimit
+	}
 	if err := model.UpdateGroupRateLimitOptions(
 		*request.MemberEnabled,
 		*request.SharedPoolEnabled,
 		request.ModelRequestRateLimitGroup,
 		request.Policies,
+		settings,
 	); err != nil {
 		common.ApiError(c, err)
 		return

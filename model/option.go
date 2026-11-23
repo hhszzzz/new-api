@@ -630,6 +630,7 @@ func UpdateGroupRateLimitOptions(
 	sharedPoolEnabled bool,
 	requestCountLimits map[string][2]int,
 	policies map[string]group_rate_limit_setting.GroupPolicy,
+	newUserSettings ...group_rate_limit_setting.NewUserSettings,
 ) error {
 	if requestCountLimits == nil {
 		requestCountLimits = map[string][2]int{}
@@ -637,11 +638,22 @@ func UpdateGroupRateLimitOptions(
 	if policies == nil {
 		policies = map[string]group_rate_limit_setting.GroupPolicy{}
 	}
-	prepared, err := group_rate_limit_setting.PrepareSetting(group_rate_limit_setting.Setting{
+	candidateSetting := group_rate_limit_setting.Setting{
 		MemberEnabled:     memberEnabled,
 		SharedPoolEnabled: sharedPoolEnabled,
 		Policies:          policies,
-	})
+	}
+	if current := group_rate_limit_setting.GetSettingSnapshot(); current != nil {
+		candidateSetting.RegistrationCodeRequired = current.RegistrationCodeRequired
+		candidateSetting.DefaultNewUserRPMLimit = current.DefaultNewUserRPMLimit
+		candidateSetting.DefaultNewUserConcurrencyLimit = current.DefaultNewUserConcurrencyLimit
+	}
+	if len(newUserSettings) > 0 {
+		candidateSetting.RegistrationCodeRequired = newUserSettings[0].RegistrationCodeRequired
+		candidateSetting.DefaultNewUserRPMLimit = newUserSettings[0].DefaultNewUserRPMLimit
+		candidateSetting.DefaultNewUserConcurrencyLimit = newUserSettings[0].DefaultNewUserConcurrencyLimit
+	}
+	prepared, err := group_rate_limit_setting.PrepareSetting(candidateSetting)
 	if err != nil {
 		return err
 	}
@@ -657,10 +669,13 @@ func UpdateGroupRateLimitOptions(
 		return err
 	}
 	return UpdateOptionsBulk(map[string]string{
-		"ModelRequestRateLimitGroup":                        string(requestCountJSON),
-		group_rate_limit_setting.MemberEnabledOptionKey:     strconv.FormatBool(prepared.MemberEnabled),
-		group_rate_limit_setting.SharedPoolEnabledOptionKey: strconv.FormatBool(prepared.SharedPoolEnabled),
-		group_rate_limit_setting.PoliciesOptionKey:          string(policiesJSON),
+		"ModelRequestRateLimitGroup":                                string(requestCountJSON),
+		group_rate_limit_setting.MemberEnabledOptionKey:             strconv.FormatBool(prepared.MemberEnabled),
+		group_rate_limit_setting.SharedPoolEnabledOptionKey:         strconv.FormatBool(prepared.SharedPoolEnabled),
+		group_rate_limit_setting.PoliciesOptionKey:                  string(policiesJSON),
+		group_rate_limit_setting.RegistrationCodeRequiredOptionKey:  strconv.FormatBool(prepared.RegistrationCodeRequired),
+		group_rate_limit_setting.DefaultNewUserRPMOptionKey:         strconv.Itoa(prepared.DefaultNewUserRPMLimit),
+		group_rate_limit_setting.DefaultNewUserConcurrencyOptionKey: strconv.Itoa(prepared.DefaultNewUserConcurrencyLimit),
 	})
 }
 

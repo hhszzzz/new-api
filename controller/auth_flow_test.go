@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -20,6 +21,8 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/fxamacker/cbor/v2"
 	"github.com/gin-gonic/gin"
@@ -700,6 +703,251 @@ func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 	assert.Equal(t, "invite-code", payload.AffiliateCode)
 	assert.Zero(t, flow.UserId)
 	assert.Empty(t, flow.SessionId)
+}
+
+func TestOAuthRegistrationStateStoresOnlyRegistrationCodeDigest(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	const registrationCode = "registration-code-secret-123456"
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"auth-flow-test","intent":"register","registration_code":"`+registrationCode+`"}`))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	GenerateOAuthCode(c)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	var response struct {
+		Success bool `json:"success"`
+		Data    struct {
+			FlowToken string `json:"flow_token"`
+		} `json:"data"`
+	}
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
+	require.True(t, response.Success)
+	flow, err := model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{
+		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentRegister,
+	})
+	require.NoError(t, err)
+	assert.NotContains(t, flow.Payload, registrationCode)
+	var payload oauthFlowPayload
+	require.NoError(t, common.UnmarshalJsonStr(flow.Payload, &payload))
+	assert.Equal(t, model.RedemptionCodeDigest(registrationCode), payload.RegistrationCodeDigest)
+}
+
+func TestOAuthFirstRegistrationRequiresCode(t *testing.T) {
+	provider := setupAuthFlowControllerTest(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Redemption{}))
+	previous := group_rate_limit_setting.GetSettingSnapshot()
+	_, err := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+		"registration_code_required": "true",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, cleanupErr := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+			"registration_code_required": strconv.FormatBool(previous.RegistrationCodeRequired),
+		})
+		assert.NoError(t, cleanupErr)
+	})
+	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	oauthUser := &oauth.OAuthUser{ProviderUserID: "requires-registration-code", Username: "new-user"}
+	_, _, err = findOrCreateOAuthUser(ctx, provider, oauthUser, &oauth.OAuthToken{}, "")
+	require.ErrorIs(t, err, model.ErrRegistrationCodeInvalid)
+
+	existing := &model.User{
+		Username: "existing-oauth-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", GitHubId: "existing-oauth-id",
+	}
+	require.NoError(t, model.DB.Create(existing).Error)
+	loggedIn, _, err := findOrCreateOAuthUser(
+		ctx, &oauth.GitHubProvider{}, &oauth.OAuthUser{ProviderUserID: existing.GitHubId}, &oauth.OAuthToken{}, "",
+	)
+	require.NoError(t, err)
+	assert.Equal(t, existing.Id, loggedIn.Id, "the registration gate must not block existing OAuth logins")
+
+	require.NoError(t, model.DB.AutoMigrate(
+		&model.Redemption{}, &model.UserGroupMembership{}, &model.UserModelPermission{},
+		&model.UserModelBlock{}, &model.UserModelRoute{},
+	))
+	const rawCode = "abcdef0123456789abcdef0123456789"
+	registrationCode := model.Redemption{
+		Name: "oauth-registration", Key: rawCode, Type: model.RedemptionTypeRegistration,
+		Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, model.DB.Create(&registrationCode).Error)
+	const providerUserID = "oauth-registration-subject"
+	created, _, err := findOrCreateOAuthUser(
+		ctx,
+		&oauth.GitHubProvider{},
+		&oauth.OAuthUser{ProviderUserID: providerUserID, Username: "registered-oauth-user"},
+		&oauth.OAuthToken{},
+		"",
+		model.RedemptionCodeDigest(rawCode),
+	)
+	require.NoError(t, err)
+	assert.Equal(t, providerUserID, created.GitHubId)
+	var consumed model.Redemption
+	require.NoError(t, model.DB.First(&consumed, "id = ?", registrationCode.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, consumed.Status)
+	assert.Equal(t, created.Id, consumed.UsedUserId)
+}
+
+func TestPasswordRegistrationConsumesRegistrationCodeWithoutDisclosingCodeState(t *testing.T) {
+	setupAuthFlowControllerTest(t)
+	previousRegisterEnabled := common.RegisterEnabled
+	previousPasswordRegisterEnabled := common.PasswordRegisterEnabled
+	previousEmailVerificationEnabled := common.EmailVerificationEnabled
+	common.RegisterEnabled = true
+	common.PasswordRegisterEnabled = true
+	common.EmailVerificationEnabled = false
+	t.Cleanup(func() {
+		common.RegisterEnabled = previousRegisterEnabled
+		common.PasswordRegisterEnabled = previousPasswordRegisterEnabled
+		common.EmailVerificationEnabled = previousEmailVerificationEnabled
+	})
+	previousSettings := group_rate_limit_setting.GetSettingSnapshot()
+	_, err := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+		"registration_code_required": "true",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, restoreErr := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+			"registration_code_required":   strconv.FormatBool(previousSettings.RegistrationCodeRequired),
+			"default_new_user_rpm":         strconv.Itoa(previousSettings.DefaultNewUserRPMLimit),
+			"default_new_user_concurrency": strconv.Itoa(previousSettings.DefaultNewUserConcurrencyLimit),
+		})
+		assert.NoError(t, restoreErr)
+	})
+	require.NoError(t, model.DB.AutoMigrate(&model.UserGroupMembership{}, &model.Redemption{}, &model.Group{}))
+	require.NoError(t, model.DB.Create(&model.Group{Name: "default", Ratio: 1, CreatedAt: common.GetTimestamp(), UpdatedAt: common.GetTimestamp()}).Error)
+	const rawCode = "0123456789abcdef0123456789abcdef"
+	code := model.Redemption{
+		Name: "password-registration", Key: rawCode, Type: model.RedemptionTypeRegistration,
+		Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, model.DB.Create(&code).Error)
+
+	registerRequest := func(username, registrationCode string) *httptest.ResponseRecorder {
+		payload, err := common.Marshal(map[string]string{
+			"username": username, "password": "valid-password-123", "registration_code": registrationCode,
+		})
+		require.NoError(t, err)
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodPost, "/api/user/register", strings.NewReader(string(payload)))
+		Register(context)
+		return recorder
+	}
+
+	for _, test := range []struct {
+		name     string
+		username string
+		code     string
+	}{
+		{name: "missing code", username: "reg-missing"},
+		{name: "invalid code", username: "reg-invalid", code: "wrong-registration-code"},
+		{name: "oversized code", username: "reg-oversized", code: strings.Repeat("x", maxRegistrationCodeLength+1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := registerRequest(test.username, test.code)
+			assert.Equal(t, http.StatusOK, response.Code)
+			var result struct {
+				Success    bool   `json:"success"`
+				Message    string `json:"message"`
+				MessageKey string `json:"message_key"`
+			}
+			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+			assert.False(t, result.Success)
+			assert.Equal(t, "Registration failed, please try again", result.Message)
+			assert.Equal(t, result.Message, result.MessageKey)
+			assert.NotContains(t, response.Body.String(), rawCode)
+		})
+	}
+	require.NoError(t, model.DB.Create(&model.User{
+		Username: "existing-reg-user", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}).Error)
+	for _, registrationCode := range []string{"", "wrong-registration-code", rawCode} {
+		response := registerRequest("existing-reg-user", registrationCode)
+		var result struct {
+			Success bool   `json:"success"`
+			Message string `json:"message"`
+		}
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
+		assert.False(t, result.Success)
+		assert.Equal(t, "Registration failed, please try again", result.Message)
+	}
+	var stillUnused model.Redemption
+	require.NoError(t, model.DB.First(&stillUnused, "id = ?", code.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, stillUnused.Status)
+	var users int64
+	require.NoError(t, model.DB.Model(&model.User{}).Where("username LIKE ?", "reg-%").Count(&users).Error)
+	assert.Zero(t, users, "failed attempts must not create accounts")
+
+	response := registerRequest("reg-success", rawCode)
+	assert.Equal(t, http.StatusOK, response.Code)
+	assert.JSONEq(t, `{"message":"","success":true}`, response.Body.String())
+	assert.NotContains(t, response.Body.String(), rawCode)
+	var created model.User
+	require.NoError(t, model.DB.Where("username = ?", "reg-success").Take(&created).Error)
+	var membership model.UserGroupMembership
+	require.NoError(t, model.DB.Where("user_id = ?", created.Id).Take(&membership).Error)
+	assert.Equal(t, "default", membership.GroupName)
+	var used model.Redemption
+	require.NoError(t, model.DB.First(&used, "id = ?", code.Id).Error)
+	assert.Equal(t, common.RedemptionCodeStatusUsed, used.Status)
+	assert.Equal(t, created.Id, used.UsedUserId)
+}
+
+func TestOAuthRegistrationDoesNotExposeExistingEmailWhenCodeGateIsEnabled(t *testing.T) {
+	provider := setupAuthFlowControllerTest(t)
+	previous := group_rate_limit_setting.GetSettingSnapshot()
+	_, err := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+		"registration_code_required": "true",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, restoreErr := config.GlobalConfig.Update(group_rate_limit_setting.ConfigName, map[string]string{
+			"registration_code_required":   strconv.FormatBool(previous.RegistrationCodeRequired),
+			"default_new_user_rpm":         strconv.Itoa(previous.DefaultNewUserRPMLimit),
+			"default_new_user_concurrency": strconv.Itoa(previous.DefaultNewUserConcurrencyLimit),
+		})
+		assert.NoError(t, restoreErr)
+	})
+	const email = "registered@example.com"
+	require.NoError(t, model.DB.Create(&model.User{
+		Username: "existing-oauth-email", Email: email, Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default",
+	}).Error)
+	const rawCode = "0123456789abcdef0123456789abcdef"
+	require.NoError(t, model.DB.AutoMigrate(&model.Redemption{}))
+	registrationCode := model.Redemption{
+		Name: "oauth-enumeration", Key: rawCode, Type: model.RedemptionTypeRegistration,
+		Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, model.DB.Create(&registrationCode).Error)
+	for _, digest := range []string{"", model.RedemptionCodeDigest(rawCode)} {
+		payload, err := common.Marshal(oauthFlowPayload{RegistrationCodeDigest: digest})
+		require.NoError(t, err)
+		flow := &model.AuthFlow{Intent: model.AuthFlowIntentRegister, Payload: string(payload)}
+		recorder := httptest.NewRecorder()
+		context, _ := gin.CreateTestContext(recorder)
+		context.Request = httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test", nil)
+
+		handleOAuthLogin(context, provider, &oauth.OAuthUser{
+			ProviderUserID: "new-provider-subject", Username: "oauth-new", Email: email,
+		}, &oauth.OAuthToken{}, flow)
+
+		var result struct {
+			Success    bool   `json:"success"`
+			Message    string `json:"message"`
+			MessageKey string `json:"message_key"`
+		}
+		require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &result))
+		assert.False(t, result.Success)
+		assert.Equal(t, "Registration failed, please try again", result.Message)
+		assert.Equal(t, result.Message, result.MessageKey)
+		assert.NotContains(t, recorder.Body.String(), email)
+		assert.NotContains(t, recorder.Body.String(), rawCode)
+	}
 }
 
 func TestGenerateOAuthCodeBindsFlowToAuthenticatedSession(t *testing.T) {

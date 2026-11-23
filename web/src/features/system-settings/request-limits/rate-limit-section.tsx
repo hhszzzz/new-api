@@ -79,6 +79,9 @@ const createRateLimitSchema = (t: (key: string) => string) =>
     group_rate_limit_setting: z.object({
       member_enabled: z.boolean(),
       shared_pool_enabled: z.boolean(),
+      registration_code_required: z.boolean(),
+      default_new_user_rpm: z.number().int().min(0).max(2147483647),
+      default_new_user_concurrency: z.number().int().min(0).max(2147483647),
       policies: z
         .string()
         .optional()
@@ -98,6 +101,9 @@ type RateLimitOptionValues = {
   ModelRequestRateLimitGroup?: string
   'group_rate_limit_setting.member_enabled': boolean
   'group_rate_limit_setting.shared_pool_enabled': boolean
+  'group_rate_limit_setting.registration_code_required': boolean
+  'group_rate_limit_setting.default_new_user_rpm': number
+  'group_rate_limit_setting.default_new_user_concurrency': number
   'group_rate_limit_setting.policies'?: string
 }
 
@@ -138,6 +144,12 @@ function buildFormDefaults(
       member_enabled: defaults['group_rate_limit_setting.member_enabled'],
       shared_pool_enabled:
         defaults['group_rate_limit_setting.shared_pool_enabled'],
+      registration_code_required:
+        defaults['group_rate_limit_setting.registration_code_required'],
+      default_new_user_rpm:
+        defaults['group_rate_limit_setting.default_new_user_rpm'],
+      default_new_user_concurrency:
+        defaults['group_rate_limit_setting.default_new_user_concurrency'],
       policies: defaults['group_rate_limit_setting.policies'],
     },
   }
@@ -157,6 +169,12 @@ function normalizeFormValues(
       values.group_rate_limit_setting.member_enabled,
     'group_rate_limit_setting.shared_pool_enabled':
       values.group_rate_limit_setting.shared_pool_enabled,
+    'group_rate_limit_setting.registration_code_required':
+      values.group_rate_limit_setting.registration_code_required,
+    'group_rate_limit_setting.default_new_user_rpm':
+      values.group_rate_limit_setting.default_new_user_rpm,
+    'group_rate_limit_setting.default_new_user_concurrency':
+      values.group_rate_limit_setting.default_new_user_concurrency,
     'group_rate_limit_setting.policies':
       values.group_rate_limit_setting.policies,
   }
@@ -189,6 +207,16 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
           defaultValues['group_rate_limit_setting.member_enabled'] ||
         values['group_rate_limit_setting.shared_pool_enabled'] !==
           defaultValues['group_rate_limit_setting.shared_pool_enabled'] ||
+        values['group_rate_limit_setting.registration_code_required'] !==
+          defaultValues[
+            'group_rate_limit_setting.registration_code_required'
+          ] ||
+        values['group_rate_limit_setting.default_new_user_rpm'] !==
+          defaultValues['group_rate_limit_setting.default_new_user_rpm'] ||
+        values['group_rate_limit_setting.default_new_user_concurrency'] !==
+          defaultValues[
+            'group_rate_limit_setting.default_new_user_concurrency'
+          ] ||
         values['group_rate_limit_setting.policies'] !==
           defaultValues['group_rate_limit_setting.policies']
 
@@ -197,6 +225,12 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
           member_enabled: values['group_rate_limit_setting.member_enabled'],
           shared_pool_enabled:
             values['group_rate_limit_setting.shared_pool_enabled'],
+          registration_code_required:
+            values['group_rate_limit_setting.registration_code_required'],
+          default_new_user_rpm:
+            values['group_rate_limit_setting.default_new_user_rpm'],
+          default_new_user_concurrency:
+            values['group_rate_limit_setting.default_new_user_concurrency'],
           model_request_rate_limit_group: parseRequestCounts(
             values.ModelRequestRateLimitGroup
           ),
@@ -408,6 +442,91 @@ export function RateLimitSection({ defaultValues }: RateLimitSectionProps) {
                   </SettingsSwitchItem>
                 )}
               />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t('New-user limits and registration')}</CardTitle>
+              <CardDescription>
+                {t(
+                  'These defaults apply when a new ordinary user account is created. Existing accounts are unchanged.'
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-4'>
+              <FormField
+                control={form.control}
+                name='group_rate_limit_setting.registration_code_required'
+                render={({ field }) => (
+                  <SettingsSwitchItem>
+                    <SettingsSwitchContent>
+                      <FormLabel>{t('Require a registration code')}</FormLabel>
+                      <FormDescription>
+                        {t(
+                          'New accounts created by password or OAuth registration must use an unused registration code.'
+                        )}
+                      </FormDescription>
+                    </SettingsSwitchContent>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </SettingsSwitchItem>
+                )}
+              />
+              <div className='grid gap-4 md:grid-cols-2'>
+                <FormField
+                  control={form.control}
+                  name='group_rate_limit_setting.default_new_user_rpm'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('New-user default RPM')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={2147483647}
+                          step={1}
+                          {...field}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('0 means no personal RPM limit.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name='group_rate_limit_setting.default_new_user_concurrency'
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t('New-user default concurrency')}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type='number'
+                          min={0}
+                          max={2147483647}
+                          step={1}
+                          {...field}
+                          onChange={(event) =>
+                            field.onChange(Number(event.target.value) || 0)
+                          }
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        {t('0 means no personal concurrency limit.')}
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
             </CardContent>
           </Card>
 

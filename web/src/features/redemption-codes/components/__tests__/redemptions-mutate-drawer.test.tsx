@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   fireEvent,
   render,
@@ -23,8 +24,13 @@ import {
   waitFor,
   type RenderResult,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, test } from 'vitest'
 
+import {
+  transformFormDataToPayload,
+  type RedemptionFormValues,
+} from '../../lib/redemption-form'
 import type { Redemption } from '../../types'
 
 const i18n = (await import('i18next')).default
@@ -53,6 +59,7 @@ type ApiMethod = (url: string, data?: unknown) => Promise<{ data: unknown }>
 type MockableApi = {
   get: ApiMethod
   put: ApiMethod
+  post: ApiMethod
 }
 type RenderedDrawer = {
   result: RenderResult
@@ -65,8 +72,62 @@ type CurrencyFixture = {
 const apiClient = api as unknown as MockableApi
 const originalGet = apiClient.get
 const originalPut = apiClient.put
+const originalPost = apiClient.post
 const originalConsoleLog = Reflect.get(console, 'log')
 let renderedDrawer: RenderedDrawer | null = null
+
+describe('redemption form payloads', () => {
+  const base: RedemptionFormValues = {
+    name: 'batch',
+    type: 'balance',
+    quota_dollars: 10,
+    expired_time: null,
+    count: 3,
+    plan_id: 0,
+    rpm_delta: 0,
+    concurrency_delta: 0,
+    validity_days: 7,
+    target_group: '',
+    initial_rpm_limit: null,
+    initial_concurrency_limit: null,
+  }
+
+  test('sends the snapshot plan, timed increases, and registration defaults by code type', () => {
+    expect(
+      transformFormDataToPayload({ ...base, type: 'subscription', plan_id: 42 })
+    ).toMatchObject({ type: 'subscription', plan_id: 42, quota: 0, count: 3 })
+    expect(
+      transformFormDataToPayload({
+        ...base,
+        type: 'rate_limit',
+        rpm_delta: 20,
+        concurrency_delta: 2,
+        validity_days: 14,
+      })
+    ).toMatchObject({
+      type: 'rate_limit',
+      rpm_delta: 20,
+      concurrency_delta: 2,
+      validity_seconds: 14 * 86400,
+      quota: 0,
+    })
+    expect(
+      transformFormDataToPayload({
+        ...base,
+        type: 'registration',
+        target_group: 'vip',
+        initial_rpm_limit: 60,
+        initial_concurrency_limit: 0,
+      })
+    ).toMatchObject({
+      type: 'registration',
+      target_group: 'vip',
+      initial_rpm_limit: 60,
+      initial_concurrency_limit: 0,
+      quota: 0,
+    })
+  })
+})
 
 function redemption(id: number, quota = 500001): Redemption {
   return {
@@ -93,16 +154,21 @@ function deferred<T>() {
   return { promise, reject, resolve }
 }
 
-function drawerTree(currentRow: Redemption, open = true) {
+function drawerTree(currentRow?: Redemption, open = true) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
   return (
     <I18nextProvider i18n={i18n}>
-      <RedemptionsProvider>
-        <RedemptionsMutateDrawer
-          open={open}
-          currentRow={currentRow}
-          onOpenChange={() => undefined}
-        />
-      </RedemptionsProvider>
+      <QueryClientProvider client={queryClient}>
+        <RedemptionsProvider>
+          <RedemptionsMutateDrawer
+            open={open}
+            currentRow={currentRow}
+            onOpenChange={() => undefined}
+          />
+        </RedemptionsProvider>
+      </QueryClientProvider>
       <Toaster duration={60_000} />
     </I18nextProvider>
   )
@@ -127,6 +193,20 @@ async function renderDrawer(
   })
 
   renderedDrawer = { result: render(drawerTree(currentRow)) }
+}
+
+async function renderCreateDrawer(): Promise<void> {
+  useSystemConfigStore.getState().setConfig({
+    currency: {
+      displayInCurrency: true,
+      quotaDisplayType: 'USD',
+      quotaPerUnit: 500000,
+      usdExchangeRate: 1,
+      customCurrencySymbol: '¤',
+      customCurrencyExchangeRate: 1,
+    },
+  })
+  renderedDrawer = { result: render(drawerTree()) }
 }
 
 async function rerenderDrawer(
@@ -183,6 +263,7 @@ async function waitForLoadedForm(): Promise<void> {
 afterEach(() => {
   apiClient.get = originalGet
   apiClient.put = originalPut
+  apiClient.post = originalPost
   Reflect.set(console, 'log', originalConsoleLog)
   toast.dismiss()
   localStorage.clear()
@@ -190,6 +271,41 @@ afterEach(() => {
 })
 
 describe('redemption drawer', () => {
+  test('preserves a real group whose name matches the default-group label', async () => {
+    let submitted: Record<string, unknown> | undefined
+    const user = userEvent.setup()
+    apiClient.get = async (url) =>
+      url === '/api/group/'
+        ? { data: { success: true, data: ['default-group', 'vip'] } }
+        : { data: { success: true, data: [] } }
+    apiClient.post = async (_url, data) => {
+      submitted = data as Record<string, unknown>
+      return {
+        data: { success: true, data: ['registration-code'], batch_id: 1 },
+      }
+    }
+
+    await renderCreateDrawer()
+    fireEvent.change(getControlByLabel('Name'), {
+      target: { value: 'registration-batch' },
+    })
+    await user.click(screen.getByRole('combobox', { name: 'Code type' }))
+    await user.click(
+      await screen.findByRole('option', { name: 'Registration code' })
+    )
+    await user.click(
+      await screen.findByRole('combobox', { name: 'Initial primary group' })
+    )
+    await user.click(
+      await screen.findByRole('option', { name: 'default-group' })
+    )
+    submitForm()
+
+    await waitFor(() =>
+      expect(submitted).toMatchObject({ target_group: 'default-group' })
+    )
+  })
+
   test('shows the reported CNY quota without floating-point noise', async () => {
     const original = redemption(1, 13888889)
     apiClient.get = async () => ({ data: { success: true, data: original } })

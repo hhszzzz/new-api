@@ -230,6 +230,9 @@ describe('group rate-limit settings', () => {
               ModelRequestRateLimitGroup: '{"default":[200,100]}',
               'group_rate_limit_setting.member_enabled': false,
               'group_rate_limit_setting.shared_pool_enabled': false,
+              'group_rate_limit_setting.registration_code_required': false,
+              'group_rate_limit_setting.default_new_user_rpm': 0,
+              'group_rate_limit_setting.default_new_user_concurrency': 0,
               'group_rate_limit_setting.policies':
                 '{"default":{"member_limits":{"rpm_limit":60}}}',
             }}
@@ -247,6 +250,9 @@ describe('group rate-limit settings', () => {
         member_enabled: true,
         shared_pool_enabled: false,
         model_request_rate_limit_group: { default: [200, 100] },
+        registration_code_required: false,
+        default_new_user_rpm: 0,
+        default_new_user_concurrency: 0,
         policies: {
           default: { member_limits: { rpm_limit: 60 } },
         },

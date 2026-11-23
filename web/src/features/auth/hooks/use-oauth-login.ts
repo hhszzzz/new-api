@@ -40,7 +40,9 @@ import type { SystemStatus, CustomOAuthProviderInfo } from '../types'
  */
 export function useOAuthLogin(
   status: SystemStatus | null,
-  redirectTo?: string
+  redirectTo?: string,
+  intent: 'login' | 'register' = 'login',
+  registrationCode?: string
 ) {
   const { t } = useTranslation()
   const continueLabel = t('Continue with GitHub')
@@ -96,7 +98,13 @@ export function useOAuthLogin(
 
     try {
       await resetSession()
-      const state = await createOAuthFlow('github', 'login')
+      const state = await createOAuthFlow(
+        'github',
+        intent,
+        undefined,
+        undefined,
+        registrationCode
+      )
       rememberOAuthLoginRedirect(state, redirectTo)
 
       const url = buildGitHubOAuthUrl(status.github_client_id, state)
@@ -120,7 +128,13 @@ export function useOAuthLogin(
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await createOAuthFlow('discord', 'login')
+      const state = await createOAuthFlow(
+        'discord',
+        intent,
+        undefined,
+        undefined,
+        registrationCode
+      )
       rememberOAuthLoginRedirect(state, redirectTo)
 
       const url = buildDiscordOAuthUrl(status.discord_client_id, state)
@@ -140,7 +154,13 @@ export function useOAuthLogin(
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await createOAuthFlow('oidc', 'login')
+      const state = await createOAuthFlow(
+        'oidc',
+        intent,
+        undefined,
+        undefined,
+        registrationCode
+      )
       rememberOAuthLoginRedirect(state, redirectTo)
 
       const url = buildOIDCOAuthUrl(
@@ -164,7 +184,13 @@ export function useOAuthLogin(
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await createOAuthFlow('linuxdo', 'login')
+      const state = await createOAuthFlow(
+        'linuxdo',
+        intent,
+        undefined,
+        undefined,
+        registrationCode
+      )
       rememberOAuthLoginRedirect(state, redirectTo)
 
       const url = buildLinuxDOOAuthUrl(status.linuxdo_client_id, state)
@@ -189,7 +215,14 @@ export function useOAuthLogin(
     }
     setIsLoading(true)
     try {
-      const authorization = await createOAuthAuthorization('telegram', 'login')
+      const authorization = await createOAuthAuthorization(
+        'telegram',
+        intent,
+        undefined,
+        undefined,
+        undefined,
+        registrationCode
+      )
       if (!authorization.authorizationUrl) {
         throw new AuthOperationError('Failed to initialize OAuth')
       }
@@ -209,7 +242,13 @@ export function useOAuthLogin(
     setIsLoading(true)
     try {
       await resetSession()
-      const state = await createOAuthFlow(provider.slug, 'login')
+      const state = await createOAuthFlow(
+        provider.slug,
+        intent,
+        undefined,
+        undefined,
+        registrationCode
+      )
       rememberOAuthLoginRedirect(state, redirectTo)
 
       const redirectUri = `${window.location.origin}/oauth/${provider.slug}`

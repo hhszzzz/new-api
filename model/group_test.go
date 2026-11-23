@@ -65,6 +65,8 @@ func setupGroupRegistryDB(
 		&UserModelRouteExecutionGroup{},
 		&SubscriptionPlan{},
 		&UserSubscription{},
+		&Redemption{},
+		&RedemptionBatch{},
 	}
 	if migrateRegistry {
 		models = append(models, &Group{}, &GroupNameHistory{})
@@ -252,6 +254,33 @@ func TestGroupRegistryMigratesLegacySchemaAndMutatesGroupsOnSQLDialects(t *testi
 			require.NoError(t, deleteOnlyToken.SetAutoGroups([]string{"team"}))
 			require.NoError(t, db.Create(&deleteOnlyToken).Error)
 			deleteOnlyPolicyVersion := deleteOnlyUser.PolicyVersion
+			renameRegistrationCode := Redemption{
+				Name: "group-dialect-rename-registration", Key: "00000000000000000000000000000075",
+				Type: RedemptionTypeRegistration, TargetGroup: "vip", Status: common.RedemptionCodeStatusEnabled,
+			}
+			require.NoError(t, db.Create(&renameRegistrationCode).Error)
+			disabledRegistrationCode := Redemption{
+				Name: "group-dialect-disabled-registration", Key: "00000000000000000000000000000076",
+				Type: RedemptionTypeRegistration, TargetGroup: "team", Status: common.RedemptionCodeStatusDisabled,
+				ExpiredTime: common.GetTimestamp() - 1,
+			}
+			require.NoError(t, db.Create(&disabledRegistrationCode).Error)
+			issuedPlan := SubscriptionPlan{
+				Id: 44, Title: "Dialect snapshot", UpgradeGroup: "vip", DowngradeGroup: "team",
+			}
+			issuedPlanSnapshot, err := common.Marshal(issuedPlan)
+			require.NoError(t, err)
+			subscriptionCode := Redemption{
+				Name: "group-dialect-subscription", Key: "00000000000000000000000000000079",
+				Type: RedemptionTypeSubscription, PlanSnapshot: string(issuedPlanSnapshot),
+				Status: common.RedemptionCodeStatusEnabled,
+			}
+			require.NoError(t, db.Create(&subscriptionCode).Error)
+			subscriptionBatch := RedemptionBatch{
+				Name: "group-dialect-subscription", Type: RedemptionTypeSubscription,
+				PlanSnapshot: string(issuedPlanSnapshot), Count: 1, CreatedAt: common.GetTimestamp(),
+			}
+			require.NoError(t, db.Create(&subscriptionBatch).Error)
 
 			require.NoError(t, RenameGroup("vip", Group{
 				Name:        "premium",
@@ -259,6 +288,22 @@ func TestGroupRegistryMigratesLegacySchemaAndMutatesGroupsOnSQLDialects(t *testi
 				Ratio:       2.5,
 				SortOrder:   1,
 			}))
+			var renamedRegistrationCode Redemption
+			require.NoError(t, db.First(&renamedRegistrationCode, renameRegistrationCode.Id).Error)
+			assert.Equal(t, "premium", renamedRegistrationCode.TargetGroup)
+			var renamedSubscriptionCode Redemption
+			require.NoError(t, db.First(&renamedSubscriptionCode, subscriptionCode.Id).Error)
+			var renamedPlan SubscriptionPlan
+			require.NoError(t, common.UnmarshalJsonStr(renamedSubscriptionCode.PlanSnapshot, &renamedPlan))
+			assert.Equal(t, "premium", renamedPlan.UpgradeGroup)
+			require.NoError(t, db.First(&subscriptionBatch, subscriptionBatch.Id).Error)
+			require.NoError(t, common.UnmarshalJsonStr(subscriptionBatch.PlanSnapshot, &renamedPlan))
+			assert.Equal(t, "premium", renamedPlan.UpgradeGroup)
+			require.Equal(t, "team", renamedPlan.DowngradeGroup)
+			require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions)
+			require.NoError(t, db.Unscoped().Delete(&subscriptionCode).Error)
+			require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions)
+			require.NoError(t, db.Unscoped().Delete(&disabledRegistrationCode).Error)
 			require.NoError(t, DeleteGroup("team"))
 			groups, err := ListGroups()
 			require.NoError(t, err)
@@ -416,6 +461,32 @@ func TestRenameGroupUpdatesLiveReferencesAndSnapshotsTaskRatio(t *testing.T) {
 	require.NoError(t, db.Create(&UserModelRouteExecutionGroup{RouteId: route.Id, GroupName: "vip", Position: 0}).Error)
 	task := Task{TaskID: "group-rename-task", UserId: user.Id, Group: "vip", Status: TaskStatusQueued}
 	require.NoError(t, db.Create(&task).Error)
+	registrationCode := Redemption{
+		Name: "group-rename-registration", Key: "00000000000000000000000000000071",
+		Type: RedemptionTypeRegistration, TargetGroup: "vip", Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, db.Create(&registrationCode).Error)
+	registrationBatch := RedemptionBatch{
+		Name: "group-rename-registration", Type: RedemptionTypeRegistration,
+		TargetGroup: "vip", Count: 1, CreatedAt: common.GetTimestamp(),
+	}
+	require.NoError(t, db.Create(&registrationBatch).Error)
+	issuedPlan := SubscriptionPlan{
+		Id: 42, Title: "Issued snapshot", UpgradeGroup: "vip", DowngradeGroup: "default",
+	}
+	issuedPlanSnapshot, err := common.Marshal(issuedPlan)
+	require.NoError(t, err)
+	subscriptionCode := Redemption{
+		Name: "group-rename-subscription", Key: "00000000000000000000000000000077",
+		Type: RedemptionTypeSubscription, PlanSnapshot: string(issuedPlanSnapshot),
+		Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, db.Create(&subscriptionCode).Error)
+	subscriptionBatch := RedemptionBatch{
+		Name: "group-rename-subscription", Type: RedemptionTypeSubscription,
+		PlanSnapshot: string(issuedPlanSnapshot), Count: 1, CreatedAt: common.GetTimestamp(),
+	}
+	require.NoError(t, db.Create(&subscriptionBatch).Error)
 
 	require.NoError(t, RenameGroup("vip", Group{Name: "pro", Description: "Professional", Ratio: 2, SortOrder: 2}))
 
@@ -459,6 +530,21 @@ func TestRenameGroupUpdatesLiveReferencesAndSnapshotsTaskRatio(t *testing.T) {
 	require.NotNil(t, updatedTask.PrivateData.BillingContext)
 	assert.True(t, updatedTask.PrivateData.BillingContext.GroupRatioSnapshot)
 	assert.Equal(t, 0.7, updatedTask.PrivateData.BillingContext.GroupRatio)
+	var updatedRegistrationCode Redemption
+	require.NoError(t, db.First(&updatedRegistrationCode, registrationCode.Id).Error)
+	assert.Equal(t, "pro", updatedRegistrationCode.TargetGroup)
+	var updatedRegistrationBatch RedemptionBatch
+	require.NoError(t, db.First(&updatedRegistrationBatch, registrationBatch.Id).Error)
+	assert.Equal(t, "pro", updatedRegistrationBatch.TargetGroup)
+	var updatedSubscriptionCode Redemption
+	require.NoError(t, db.First(&updatedSubscriptionCode, subscriptionCode.Id).Error)
+	var updatedIssuedPlan SubscriptionPlan
+	require.NoError(t, common.UnmarshalJsonStr(updatedSubscriptionCode.PlanSnapshot, &updatedIssuedPlan))
+	assert.Equal(t, "pro", updatedIssuedPlan.UpgradeGroup)
+	var updatedSubscriptionBatch RedemptionBatch
+	require.NoError(t, db.First(&updatedSubscriptionBatch, subscriptionBatch.Id).Error)
+	require.NoError(t, common.UnmarshalJsonStr(updatedSubscriptionBatch.PlanSnapshot, &updatedIssuedPlan))
+	assert.Equal(t, "pro", updatedIssuedPlan.UpgradeGroup)
 
 	var ratioOption, topupOption, overrideOption Option
 	require.NoError(t, db.First(&ratioOption, "key = ?", "GroupRatio").Error)
@@ -514,10 +600,48 @@ func TestDeleteGroupBlocksSubscriptionsAndCleansAssignments(t *testing.T) {
 	require.NoError(t, db.Create(&UserModelRouteGroup{RouteId: route.Id, GroupName: "team"}).Error)
 	plan := SubscriptionPlan{Title: "Team plan", DurationUnit: SubscriptionDurationMonth, DurationValue: 1, TotalAmount: 100, UpgradeGroup: "team"}
 	require.NoError(t, db.Create(&plan).Error)
+	registrationCode := Redemption{
+		Name: "team-registration", Key: "00000000000000000000000000000072",
+		Type: RedemptionTypeRegistration, TargetGroup: "team", Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, db.Create(&registrationCode).Error)
+	issuedPlan := SubscriptionPlan{
+		Id: 43, Title: "Team redemption snapshot", UpgradeGroup: "team",
+	}
+	issuedPlanSnapshot, err := common.Marshal(issuedPlan)
+	require.NoError(t, err)
+	subscriptionCode := Redemption{
+		Name: "team-subscription-redemption", Key: "00000000000000000000000000000078",
+		Type: RedemptionTypeSubscription, PlanSnapshot: string(issuedPlanSnapshot),
+		Status: common.RedemptionCodeStatusEnabled,
+	}
+	require.NoError(t, db.Create(&subscriptionCode).Error)
 
 	require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions)
+	require.NoError(t, db.Delete(&plan).Error)
+	require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions, "unused registration codes retain their target group")
+	require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions, "unused subscription codes retain snapshot group permissions")
+	require.NoError(t, db.Delete(&registrationCode).Error)
+	require.NoError(t, db.Delete(&subscriptionCode).Error)
+	for _, code := range []Redemption{
+		{
+			Name: "team-disabled-registration", Key: "00000000000000000000000000000073",
+			Type: RedemptionTypeRegistration, TargetGroup: "team", Status: common.RedemptionCodeStatusDisabled,
+		},
+		{
+			Name: "team-expired-registration", Key: "00000000000000000000000000000074",
+			Type: RedemptionTypeRegistration, TargetGroup: "team", Status: common.RedemptionCodeStatusEnabled,
+			ExpiredTime: common.GetTimestamp() - 1,
+		},
+	} {
+		require.NoError(t, db.Create(&code).Error)
+		require.ErrorIs(t, DeleteGroup("team"), ErrGroupHasSubscriptions, "unused registration codes can be re-enabled")
+		require.NoError(t, db.Delete(&code).Error)
+	}
 	plan.UpgradeGroup = ""
-	require.NoError(t, db.Save(&plan).Error)
+	plan.Id = 0
+	plan.Title = "Team plan without group reference"
+	require.NoError(t, db.Create(&plan).Error)
 	subscription := UserSubscription{
 		UserId:       user.Id,
 		PlanId:       plan.Id,

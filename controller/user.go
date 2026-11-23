@@ -22,6 +22,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/account_pool_setting"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
@@ -248,11 +249,20 @@ func Register(c *gin.Context) {
 		common.ApiErrorT(c, "Password registration has been disabled by administrator, please use third-party account verification")
 		return
 	}
-	var user model.User
-	err := common.DecodeJson(c.Request.Body, &user)
+	var request struct {
+		model.User
+		RegistrationCode string `json:"registration_code"`
+	}
+	err := common.DecodeJson(c.Request.Body, &request)
 	if err != nil {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
+	}
+	user := request.User
+	registrationCode := strings.TrimSpace(request.RegistrationCode)
+	registrationCodesRequired := false
+	if rateLimitSettings := group_rate_limit_setting.GetSettingSnapshot(); rateLimitSettings != nil {
+		registrationCodesRequired = rateLimitSettings.RegistrationCodeRequired
 	}
 	user.Username = strings.TrimSpace(user.Username)
 	user.Email = model.NormalizeEmail(user.Email)
@@ -264,6 +274,7 @@ func Register(c *gin.Context) {
 		common.ApiError(c, userValidationError(err))
 		return
 	}
+	registrationIdentityExists := false
 	if common.EmailVerificationEnabled {
 		if user.Email == "" || user.VerificationCode == "" {
 			common.ApiErrorT(c, "Email verification is enabled, please enter email address and verification code")
@@ -275,11 +286,20 @@ func Register(c *gin.Context) {
 		}
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
-				common.ApiErrorT(c, "Email address is already in use")
+				if registrationCodesRequired {
+					registrationIdentityExists = true
+				} else {
+					common.ApiErrorT(c, "Email address is already in use")
+					return
+				}
+			} else if registrationCodesRequired {
+				common.SysLog(common.LogText("registration email availability check failed: %v", err))
+				common.ApiErrorT(c, "Registration failed, please try again")
+				return
+			} else {
+				common.ApiErrorT(c, "Database error, please contact the administrator")
 				return
 			}
-			common.ApiErrorT(c, "Database error, please contact the administrator")
-			return
 		}
 	}
 	emailForExistCheck := ""
@@ -288,11 +308,30 @@ func Register(c *gin.Context) {
 	}
 	exist, err := model.CheckUserExistOrDeleted(user.Username, emailForExistCheck)
 	if err != nil {
-		common.ApiErrorT(c, "Database error, please contact the administrator")
 		common.SysLog(common.LogText("CheckUserExistOrDeleted error: %v", err))
+		if registrationCodesRequired {
+			common.ApiErrorT(c, "Registration failed, please try again")
+		} else {
+			common.ApiErrorT(c, "Database error, please contact the administrator")
+		}
 		return
 	}
-	if exist {
+	if registrationCodesRequired {
+		if len(registrationCode) > maxRegistrationCodeLength {
+			common.ApiErrorT(c, "Registration failed, please try again")
+			return
+		}
+		registrationCodeUsable, err := model.IsRegistrationCodeUsable(model.RedemptionCodeDigest(registrationCode))
+		if err != nil {
+			common.SysLog(common.LogText("registration code validation failed: %v", err))
+			common.ApiErrorT(c, "Registration failed, please try again")
+			return
+		}
+		if registrationIdentityExists || exist || !registrationCodeUsable {
+			common.ApiErrorT(c, "Registration failed, please try again")
+			return
+		}
+	} else if exist {
 		common.ApiErrorT(c, "Username already exists or has been deleted")
 		return
 	}
@@ -308,7 +347,16 @@ func Register(c *gin.Context) {
 	if common.EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
-	if err := cleanUser.Insert(inviterId); err != nil {
+	if registrationCodesRequired {
+		err = cleanUser.InsertWithRegistrationCode(model.RedemptionCodeDigest(registrationCode), inviterId)
+	} else {
+		err = cleanUser.Insert(inviterId)
+	}
+	if err != nil {
+		if registrationCodesRequired {
+			common.ApiErrorT(c, "Registration failed, please try again")
+			return
+		}
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorT(c, "Email address is already in use")
 			return
@@ -1934,7 +1982,7 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	result, err := model.RedeemRedemptionCode(req.Key, id)
 	if err != nil {
 		// The quota cap is the user's own account state, so surfacing it leaks
 		// nothing about the redemption code itself (the code stays unused).
@@ -1944,13 +1992,17 @@ func TopUp(c *gin.Context) {
 		}
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorT(c, "Redemption failed, please try again later")
-		logger.LogError(c, common.LogText("failed to redeem key %s for user %d: %s", req.Key, id, err.Error()))
+		logger.LogError(c, common.LogText("failed to redeem a code for user %d: %s", id, err.Error()))
 		return
+	}
+	var data any = result
+	if result.Type == model.RedemptionTypeBalance {
+		data = result.Quota
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    quota,
+		"data":    data,
 	})
 }
 

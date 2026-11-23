@@ -62,6 +62,7 @@ export function SignUpForm({
   const { t } = useTranslation()
   const [isLoading, setIsLoading] = useState(false)
   const [verificationCode, setVerificationCode] = useState('')
+  const [registrationCode, setRegistrationCode] = useState('')
   const [wechatCode, setWeChatCode] = useState('')
   const [isWeChatDialogOpen, setIsWeChatDialogOpen] = useState(false)
   const [isWeChatSubmitting, setIsWeChatSubmitting] = useState(false)
@@ -114,6 +115,12 @@ export function SignUpForm({
     status?.oauth_register_enabled ??
     status?.data?.oauth_register_enabled ??
     true
+  const registrationCodeRequired = Boolean(
+    status?.registration_code_required ??
+    status?.data?.registration_code_required
+  )
+  const registrationCodeMissing =
+    registrationCodeRequired && !registrationCode.trim()
   const hasWeChatLogin = Boolean(status?.wechat_login)
   const turnstileReady = !isTurnstileEnabled || Boolean(turnstileToken)
 
@@ -157,6 +164,10 @@ export function SignUpForm({
     }
 
     if (!validateTurnstile()) return
+    if (registrationCodeMissing) {
+      toast.error(t('Please enter a registration code'))
+      return
+    }
 
     setIsLoading(true)
     try {
@@ -166,6 +177,7 @@ export function SignUpForm({
         email: data.email || undefined,
         verification_code: verificationCode || undefined,
         aff_code: getAffiliateCode(),
+        registration_code: registrationCode.trim() || undefined,
         turnstile: turnstileToken,
       })
 
@@ -196,6 +208,10 @@ export function SignUpForm({
       toast.error(legalConsentErrorMessage)
       return
     }
+    if (registrationCodeMissing) {
+      toast.error(t('Please enter a registration code'))
+      return
+    }
 
     setIsWeChatDialogOpen(true)
   }
@@ -213,10 +229,18 @@ export function SignUpForm({
       toast.error(t('Please enter the verification code'))
       return
     }
+    if (registrationCodeMissing) {
+      toast.error(t('Please enter a registration code'))
+      return
+    }
 
     setIsWeChatSubmitting(true)
     try {
-      const res = await wechatLoginByCode(wechatCode)
+      const res = await wechatLoginByCode(
+        wechatCode,
+        registrationCode,
+        registrationCodeRequired
+      )
       if (res?.success) {
         handleWeChatDialogChange(false)
         if (await handleLoginResult(res.data)) {
@@ -350,6 +374,21 @@ export function SignUpForm({
         )}
 
         {/* Turnstile */}
+        {registrationCodeRequired && (
+          <div className='grid gap-2'>
+            <Label htmlFor='registration-code'>{t('Registration code')}</Label>
+            <Input
+              id='registration-code'
+              autoComplete='one-time-code'
+              maxLength={128}
+              value={registrationCode}
+              onChange={(event) => setRegistrationCode(event.target.value)}
+              disabled={isLoading}
+            />
+          </div>
+        )}
+
+        {/* Turnstile */}
         {isTurnstileEnabled && (
           <div className='mt-2'>
             <Turnstile
@@ -384,9 +423,15 @@ export function SignUpForm({
         {oauthRegisterEnabled && (
           <OAuthProviders
             status={status}
-            disabled={isLoading || (requiresLegalConsent && !agreedToLegal)}
+            disabled={
+              isLoading ||
+              registrationCodeMissing ||
+              (requiresLegalConsent && !agreedToLegal)
+            }
             onWeChatLogin={hasWeChatLogin ? handleOpenWeChatDialog : undefined}
             isWeChatLoading={isWeChatSubmitting}
+            intent='register'
+            registrationCode={registrationCode}
             className='pt-2'
           />
         )}
@@ -420,6 +465,7 @@ export function SignUpForm({
                 disabled={
                   isWeChatSubmitting ||
                   !wechatCode.trim() ||
+                  registrationCodeMissing ||
                   (requiresLegalConsent && !agreedToLegal)
                 }
                 className='gap-2'

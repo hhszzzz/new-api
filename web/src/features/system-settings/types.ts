@@ -55,6 +55,9 @@ export type UpdateGroupRateLimitOptionsRequest = {
   shared_pool_enabled: boolean
   model_request_rate_limit_group: Record<string, [number, number]>
   policies: Record<string, GroupRateLimitPolicy>
+  registration_code_required?: boolean
+  default_new_user_rpm?: number
+  default_new_user_concurrency?: number
 }
 
 export type UpdateClientPolicyOptionsRequest = {
@@ -524,6 +527,9 @@ export type SecuritySettings = {
   'group_rate_limit_setting.member_enabled': boolean
   'group_rate_limit_setting.shared_pool_enabled': boolean
   'group_rate_limit_setting.policies': string
+  'group_rate_limit_setting.registration_code_required': boolean
+  'group_rate_limit_setting.default_new_user_rpm': number
+  'group_rate_limit_setting.default_new_user_concurrency': number
   CheckSensitiveEnabled: boolean
   CheckSensitiveOnPromptEnabled: boolean
   SensitiveWords: string

@@ -16,7 +16,7 @@ import (
 var (
 	ErrGroupNotFound                = errors.New("group not found")
 	ErrGroupNameExists              = errors.New("group name already exists")
-	ErrGroupHasSubscriptions        = errors.New("group is referenced by a subscription plan or active subscription")
+	ErrGroupHasSubscriptions        = errors.New("group is referenced by a subscription plan, active subscription, or unused redemption code")
 	ErrGroupRemovalRequiresRegistry = errors.New("groups can only be removed through the group registry")
 	ErrDefaultGroupProtected        = errors.New("default group cannot be removed or renamed")
 	ErrGroupNameInvalid             = errors.New("group name is invalid")
@@ -292,7 +292,7 @@ func RenameGroup(oldName string, updated Group) error {
 	policyVersions := make(map[int]int64)
 	if err := withGroupRegistryTransaction(func(tx *gorm.DB) error {
 		var group Group
-		if err := tx.Where("name = ?", oldName).First(&group).Error; err != nil {
+		if err := lockForUpdate(tx).Where("name = ?", oldName).First(&group).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGroupNotFound
 			}
@@ -371,7 +371,7 @@ func DeleteGroup(name string) error {
 	policyVersions := make(map[int]int64)
 	if err := withGroupRegistryTransaction(func(tx *gorm.DB) error {
 		var group Group
-		if err := tx.Where("name = ?", name).First(&group).Error; err != nil {
+		if err := lockForUpdate(tx).Where("name = ?", name).First(&group).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return ErrGroupNotFound
 			}
@@ -434,6 +434,22 @@ func ensureGroupHasNoPlanOrActiveSubscription(tx *gorm.DB, groupName string) err
 		return err
 	}
 	if subscriptions > 0 {
+		return ErrGroupHasSubscriptions
+	}
+	var registrationCodes int64
+	if err := tx.Model(&Redemption{}).
+		Where("type = ? AND target_group = ? AND status IN ?", RedemptionTypeRegistration, groupName, []int{common.RedemptionCodeStatusEnabled, common.RedemptionCodeStatusDisabled}).
+		Count(&registrationCodes).Error; err != nil {
+		return err
+	}
+	if registrationCodes > 0 {
+		return ErrGroupHasSubscriptions
+	}
+	hasSnapshotReference, err := groupHasUnconsumedSubscriptionRedemptionSnapshotReference(tx, groupName)
+	if err != nil {
+		return err
+	}
+	if hasSnapshotReference {
 		return ErrGroupHasSubscriptions
 	}
 	return nil

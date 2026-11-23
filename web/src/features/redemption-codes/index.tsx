@@ -20,10 +20,10 @@ import { useTranslation } from 'react-i18next'
 
 import { SectionPageLayout } from '@/components/layout'
 
+import { RedemptionViews } from './components/redemption-views'
 import { RedemptionsDialogs } from './components/redemptions-dialogs'
 import { RedemptionsPrimaryButtons } from './components/redemptions-primary-buttons'
 import { RedemptionsProvider } from './components/redemptions-provider'
-import { RedemptionsTable } from './components/redemptions-table'
 
 export function Redemptions() {
   const { t } = useTranslation()
@@ -37,7 +37,7 @@ export function Redemptions() {
           <RedemptionsPrimaryButtons />
         </SectionPageLayout.Actions>
         <SectionPageLayout.Content>
-          <RedemptionsTable />
+          <RedemptionViews />
         </SectionPageLayout.Content>
       </SectionPageLayout>
 

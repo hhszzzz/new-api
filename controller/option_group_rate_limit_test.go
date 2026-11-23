@@ -30,6 +30,11 @@ func setupGroupRateLimitOptionControllerTest(t *testing.T) *gorm.DB {
 			previousSnapshot.SharedPoolEnabled,
 			previousRequestCounts,
 			previousSnapshot.Policies,
+			group_rate_limit_setting.NewUserSettings{
+				RegistrationCodeRequired:       previousSnapshot.RegistrationCodeRequired,
+				DefaultNewUserRPMLimit:         previousSnapshot.DefaultNewUserRPMLimit,
+				DefaultNewUserConcurrencyLimit: previousSnapshot.DefaultNewUserConcurrencyLimit,
+			},
 		))
 	})
 	return db
@@ -100,11 +105,15 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 	firstTokenDelay := 1500
 	sharedRPM := 3000
 	sharedTPS := 1000
+	defaultRPM, defaultConcurrency := 45, 3
 
 	response := performGroupRateLimitOptionUpdate(t, GroupRateLimitOptionsRequest{
-		MemberEnabled:              boolPointer(true),
-		SharedPoolEnabled:          boolPointer(true),
-		ModelRequestRateLimitGroup: map[string][2]int{"vip": {200, 100}},
+		MemberEnabled:                  boolPointer(true),
+		SharedPoolEnabled:              boolPointer(true),
+		ModelRequestRateLimitGroup:     map[string][2]int{"vip": {200, 100}},
+		RegistrationCodeRequired:       boolPointer(true),
+		DefaultNewUserRPMLimit:         &defaultRPM,
+		DefaultNewUserConcurrencyLimit: &defaultConcurrency,
 		Policies: map[string]group_rate_limit_setting.GroupPolicy{
 			" vip ": {
 				MemberLimits: group_rate_limit_setting.Limits{RPMLimit: &rpm, ConcurrencyLimit: &memberConcurrency, FirstTokenDelayMs: &firstTokenDelay},
@@ -117,6 +126,9 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 	snapshot := group_rate_limit_setting.GetSettingSnapshot()
 	assert.True(t, snapshot.MemberEnabled)
 	assert.True(t, snapshot.SharedPoolEnabled)
+	assert.True(t, snapshot.RegistrationCodeRequired)
+	assert.Equal(t, defaultRPM, snapshot.DefaultNewUserRPMLimit)
+	assert.Equal(t, defaultConcurrency, snapshot.DefaultNewUserConcurrencyLimit)
 	require.Contains(t, snapshot.Policies, "vip")
 	assert.Equal(t, rpm, *snapshot.Policies["vip"].MemberLimits.RPMLimit)
 	assert.Equal(t, firstTokenDelay, *snapshot.Policies["vip"].MemberLimits.FirstTokenDelayMs)
@@ -124,7 +136,22 @@ func TestUpdateGroupRateLimitOptionsPersistsAndPublishesCompleteSetting(t *testi
 	assert.JSONEq(t, `{"vip":[200,100]}`, requireClientPolicyOptionValue(t, db, "ModelRequestRateLimitGroup"))
 	assert.Equal(t, "true", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.MemberEnabledOptionKey))
 	assert.Equal(t, "true", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.SharedPoolEnabledOptionKey))
+	assert.Equal(t, "true", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.RegistrationCodeRequiredOptionKey))
+	assert.Equal(t, "45", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.DefaultNewUserRPMOptionKey))
+	assert.Equal(t, "3", requireClientPolicyOptionValue(t, db, group_rate_limit_setting.DefaultNewUserConcurrencyOptionKey))
 	assert.JSONEq(t, `{"vip":{"member_limits":{"rpm_limit":60,"concurrency_limit":2,"first_token_delay_ms":1500},"shared_pool":{"rpm_limit":3000,"stream_tps_limit":1000}}}`, requireClientPolicyOptionValue(t, db, group_rate_limit_setting.PoliciesOptionKey))
+
+	response = performGroupRateLimitOptionUpdate(t, GroupRateLimitOptionsRequest{
+		MemberEnabled:              boolPointer(false),
+		SharedPoolEnabled:          boolPointer(false),
+		ModelRequestRateLimitGroup: map[string][2]int{},
+		Policies:                   map[string]group_rate_limit_setting.GroupPolicy{},
+	})
+	assert.Equal(t, true, response["success"], "older clients may omit the added settings fields")
+	snapshot = group_rate_limit_setting.GetSettingSnapshot()
+	assert.True(t, snapshot.RegistrationCodeRequired)
+	assert.Equal(t, defaultRPM, snapshot.DefaultNewUserRPMLimit)
+	assert.Equal(t, defaultConcurrency, snapshot.DefaultNewUserConcurrencyLimit)
 }
 
 func TestUpdateGroupRateLimitOptionsRollsBackOnPersistenceFailure(t *testing.T) {

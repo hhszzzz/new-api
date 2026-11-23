@@ -3,6 +3,8 @@ package model
 import (
 	"errors"
 	"fmt"
+	"math"
+
 	hostdto "github.com/QuantumNous/new-api/dto"
 
 	"github.com/QuantumNous/new-api/common"
@@ -12,42 +14,60 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const userCacheSchemaVersion = 7
+const userCacheSchemaVersion = 9
 
 type UserBase struct {
-	Id                    int      `json:"id"`
-	Group                 string   `json:"group"`
-	Groups                []string `json:"groups"`
-	TopupGroup            string   `json:"topup_group"`
-	ModelLimitsEnabled    bool     `json:"model_limits_enabled"`
-	ModelLimits           []string `json:"model_limits"`
-	ModelBlocklistEnabled bool     `json:"model_blocklist_enabled"`
-	ModelBlocklist        []string `json:"model_blocklist"`
-	RpmLimit              *int     `json:"-"`
-	ConcurrencyLimit      *int     `json:"-"`
-	StreamTpsLimit        *int     `json:"-"`
-	FirstTokenDelayMs     *int     `json:"-"`
-	PolicyVersion         int64    `json:"-"`
-	Email                 string   `json:"email"`
-	Quota                 int      `json:"quota"`
-	Status                int      `json:"status"`
-	Role                  int      `json:"role"`
-	Username              string   `json:"username"`
-	Setting               string   `json:"setting"`
-	AuthVersion           int64    `json:"-"`
-	CacheSchema           int      `json:"-"`
-	CacheExpiresAt        int64    `json:"-"`
-	CacheMAC              string   `json:"-"`
+	Id                      int      `json:"id"`
+	Group                   string   `json:"group"`
+	Groups                  []string `json:"groups"`
+	TopupGroup              string   `json:"topup_group"`
+	ModelLimitsEnabled      bool     `json:"model_limits_enabled"`
+	ModelLimits             []string `json:"model_limits"`
+	ModelBlocklistEnabled   bool     `json:"model_blocklist_enabled"`
+	ModelBlocklist          []string `json:"model_blocklist"`
+	RpmLimit                *int     `json:"-"`
+	ConcurrencyLimit        *int     `json:"-"`
+	StreamTpsLimit          *int     `json:"-"`
+	FirstTokenDelayMs       *int     `json:"-"`
+	PolicyVersion           int64    `json:"-"`
+	Email                   string   `json:"email"`
+	Quota                   int      `json:"quota"`
+	Status                  int      `json:"status"`
+	Role                    int      `json:"role"`
+	Username                string   `json:"username"`
+	Setting                 string   `json:"setting"`
+	AuthVersion             int64    `json:"-"`
+	CacheSchema             int      `json:"-"`
+	CacheExpiresAt          int64    `json:"-"`
+	CacheMAC                string   `json:"-"`
+	RateLimitBonusExpiresAt int64    `json:"-"`
 }
 
 func (user UserBase) cacheMAC() (string, error) {
 	user.Quota = 0
 	return authCacheMAC(getUserCacheKey(user.Id), struct {
-		User           UserBase
-		AuthVersion    int64
-		CacheSchema    int
-		CacheExpiresAt int64
-	}{user, user.AuthVersion, user.CacheSchema, user.CacheExpiresAt})
+		User                    UserBase
+		AuthVersion             int64
+		PolicyVersion           int64
+		RpmLimit                *int
+		ConcurrencyLimit        *int
+		StreamTpsLimit          *int
+		FirstTokenDelayMs       *int
+		RateLimitBonusExpiresAt int64
+		CacheSchema             int
+		CacheExpiresAt          int64
+	}{
+		User:                    user,
+		AuthVersion:             user.AuthVersion,
+		PolicyVersion:           user.PolicyVersion,
+		RpmLimit:                user.RpmLimit,
+		ConcurrencyLimit:        user.ConcurrencyLimit,
+		StreamTpsLimit:          user.StreamTpsLimit,
+		FirstTokenDelayMs:       user.FirstTokenDelayMs,
+		RateLimitBonusExpiresAt: user.RateLimitBonusExpiresAt,
+		CacheSchema:             user.CacheSchema,
+		CacheExpiresAt:          user.CacheExpiresAt,
+	})
 }
 
 func (user *UserBase) WriteContext(c *gin.Context) {
@@ -134,7 +154,11 @@ func populateUserCache(user User) error {
 			return err
 		}
 	}
-	return writeUserCache(user.ToBaseUser(), true)
+	base := user.ToBaseUser()
+	if err := applyActiveRateLimitBonuses(base); err != nil {
+		return err
+	}
+	return writeUserCache(base, true)
 }
 
 // updateUserCache refreshes non-quota user cache fields.
@@ -149,7 +173,11 @@ func updateUserCache(user User) error {
 			return err
 		}
 	}
-	return writeUserCache(user.ToBaseUser(), false)
+	base := user.ToBaseUser()
+	if err := applyActiveRateLimitBonuses(base); err != nil {
+		return err
+	}
+	return writeUserCache(base, false)
 }
 
 // GetUserCache gets complete user cache from hash
@@ -183,7 +211,37 @@ func GetUserCache(userId int) (*UserBase, error) {
 			common.SysLog(common.LogText("failed to synchronously populate user cache: %s", err.Error()))
 		}
 	}
-	return user.ToBaseUser(), nil
+	base := user.ToBaseUser()
+	if err := applyActiveRateLimitBonuses(base); err != nil {
+		return nil, err
+	}
+	return base, nil
+}
+
+func applyActiveRateLimitBonuses(user *UserBase) error {
+	if user == nil || user.Id <= 0 {
+		return nil
+	}
+	rpmBonus, concurrencyBonus, expiresAt, err := GetActiveRedemptionRateBonuses(user.Id)
+	if err != nil {
+		return err
+	}
+	if user.RpmLimit != nil && *user.RpmLimit > 0 && rpmBonus > 0 {
+		if int64(*user.RpmLimit)+int64(rpmBonus) > math.MaxInt32 {
+			return errors.New("active RPM bonus exceeds the supported limit")
+		}
+		value := *user.RpmLimit + rpmBonus
+		user.RpmLimit = &value
+	}
+	if user.ConcurrencyLimit != nil && *user.ConcurrencyLimit > 0 && concurrencyBonus > 0 {
+		if int64(*user.ConcurrencyLimit)+int64(concurrencyBonus) > math.MaxInt32 {
+			return errors.New("active concurrency bonus exceeds the supported limit")
+		}
+		value := *user.ConcurrencyLimit + concurrencyBonus
+		user.ConcurrencyLimit = &value
+	}
+	user.RateLimitBonusExpiresAt = expiresAt
+	return nil
 }
 
 func cacheGetUserBase(userId int) (*UserBase, error) {

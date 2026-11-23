@@ -25,6 +25,9 @@ import type {
   GetRedemptionsResponse,
   SearchRedemptionsParams,
   RedemptionFormData,
+  RedemptionBatch,
+  RedemptionBatchDetail,
+  RedemptionType,
 } from './types'
 
 // ============================================================================
@@ -48,6 +51,8 @@ export async function searchRedemptions(
   const {
     keyword = '',
     status = '',
+    type = '',
+    batch_id,
     p = 1,
     page_size = 10,
     sort_by,
@@ -56,6 +61,8 @@ export async function searchRedemptions(
   const queryParams = new URLSearchParams()
   queryParams.set('keyword', keyword)
   if (status) queryParams.set('status', status)
+  if (type) queryParams.set('type', type)
+  if (batch_id) queryParams.set('batch_id', String(batch_id))
   queryParams.set('p', String(p))
   queryParams.set('page_size', String(page_size))
   if (sort_by) queryParams.set('sort_by', sort_by)
@@ -77,6 +84,47 @@ export async function createRedemption(
   data: RedemptionFormData
 ): Promise<ApiResponse<string[]>> {
   const res = await api.post('/api/redemption/', data)
+  return res.data
+}
+
+export async function getRedemptionBatches(
+  params: {
+    p?: number
+    page_size?: number
+    type?: RedemptionType | ''
+  } = {}
+): Promise<ApiResponse<{ items: RedemptionBatch[]; total: number }>> {
+  const res = await api.get('/api/redemption/batches', {
+    params: { p: 1, page_size: 100, ...params },
+  })
+  return res.data
+}
+
+export async function getRedemptionBatch(
+  id: number
+): Promise<ApiResponse<RedemptionBatchDetail>> {
+  const res = await api.get(`/api/redemption/batch/${id}`)
+  return res.data
+}
+
+export async function exportRedemptionBatch(id: number) {
+  const res = await api.get(`/api/redemption/batch/${id}/export`, {
+    responseType: 'blob',
+  })
+  const url = URL.createObjectURL(res.data)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `redemption-batch-${id}.csv`
+  document.body.append(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}
+
+export async function disableUnusedRedemptionBatch(
+  id: number
+): Promise<ApiResponse<number>> {
+  const res = await api.post(`/api/redemption/batch/${id}/disable-unused`)
   return res.data
 }
 

@@ -25,6 +25,7 @@ const (
 	AuthFlowPurposeTelegramBind      = "telegram_bind"
 	AuthFlowPurposeTelegramAssertion = "telegram_assertion"
 	AuthFlowIntentLogin              = "login"
+	AuthFlowIntentRegister           = "register"
 	AuthFlowIntentBind               = "bind"
 	AuthFlowIntentVerify             = "verify"
 	AuthFlowPurposeTwoFASetup        = "2fa_setup"

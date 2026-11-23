@@ -123,6 +123,24 @@ func TestGiftQuotaCapLimitsCheckinRedemptionAndAffTransfer(t *testing.T) {
 	require.NoError(t, DB.Model(&Redemption{}).Select("status").Where("id = ?", 1).Take(&status).Error)
 	assert.Equal(t, common.RedemptionCodeStatusEnabled, status)
 
+	// Distinct redemptions must enforce the cap in the same atomic update as
+	// the quota credit, even if the earlier headroom read is stale.
+	quotaCap = 500
+	require.NoError(t, DB.Model(&User{}).Where("id = ?", 11).Update("quota_cap", quotaCap).Error)
+	firstRedemption := Redemption{UserId: 1, Key: "cap-code-first", Quota: 100, Status: common.RedemptionCodeStatusEnabled, Name: "cap"}
+	secondRedemption := Redemption{UserId: 1, Key: "cap-code-second", Quota: 100, Status: common.RedemptionCodeStatusEnabled, Name: "cap"}
+	require.NoError(t, DB.Create(&firstRedemption).Error)
+	require.NoError(t, DB.Create(&secondRedemption).Error)
+	_, err = Redeem(firstRedemption.Key, 11)
+	require.NoError(t, err)
+	_, err = Redeem(secondRedemption.Key, 11)
+	require.ErrorIs(t, err, ErrQuotaCapExceeded)
+	require.NoError(t, DB.Model(&User{}).Select("quota").Where("id = ?", 11).Take(&quota).Error)
+	assert.Equal(t, quotaCap, quota)
+	var secondStatus int
+	require.NoError(t, DB.Model(&Redemption{}).Select("status").Where("id = ?", secondRedemption.Id).Take(&secondStatus).Error)
+	assert.Equal(t, common.RedemptionCodeStatusEnabled, secondStatus)
+
 	// Aff transfers past the cap are rejected too.
 	cappedUser := &User{Id: 11}
 	err = cappedUser.TransferAffQuotaToQuota(500000)

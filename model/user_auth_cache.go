@@ -102,7 +102,14 @@ func writeUserCache(user *UserBase, includeQuota bool) error {
 	if user.FirstTokenDelayMs != nil {
 		firstTokenDelayMs = strconv.Itoa(*user.FirstTokenDelayMs)
 	}
-	user.CacheExpiresAt = time.Now().Add(time.Duration(ttl) * time.Second).UnixMilli()
+	cacheDeadline := time.Now().Add(time.Duration(ttl) * time.Second)
+	if user.RateLimitBonusExpiresAt > 0 {
+		bonusDeadline := time.Unix(user.RateLimitBonusExpiresAt, 0)
+		if bonusDeadline.Before(cacheDeadline) {
+			cacheDeadline = bonusDeadline
+		}
+	}
+	user.CacheExpiresAt = cacheDeadline.UnixMilli()
 	mac, err := user.cacheMAC()
 	if err != nil {
 		return err
@@ -145,11 +152,12 @@ redis.call('HSET', KEYS[1],
 	'ModelLimitsEnabled', ARGV[15], 'ModelLimits', ARGV[16],
 	'ModelBlocklistEnabled', ARGV[17], 'ModelBlocklist', ARGV[18], 'PolicyVersion', ARGV[19],
 	'RpmLimit', ARGV[20], 'ConcurrencyLimit', ARGV[21], 'StreamTpsLimit', ARGV[22],
-	'FirstTokenDelayMs', ARGV[23], 'CacheExpiresAt', ARGV[24], 'CacheMAC', ARGV[25])
+	'FirstTokenDelayMs', ARGV[23], 'CacheExpiresAt', ARGV[24], 'CacheMAC', ARGV[25],
+	'RateLimitBonusExpiresAt', ARGV[26])
 if ARGV[10] == '1' and not string.match(redis.call('HGET', KEYS[1], 'Quota') or '', '^-?%d+$') then
   redis.call('HSET', KEYS[1], 'Quota', ARGV[11])
 end
-redis.call('EXPIRE', KEYS[1], ARGV[12])
+redis.call('PEXPIREAT', KEYS[1], ARGV[24])
 return 1`
 	result, err := common.RDB.Eval(context.Background(), script,
 		[]string{
@@ -161,7 +169,7 @@ return 1`
 		string(groupsJSON), user.TopupGroup, user.ModelLimitsEnabled, string(modelLimitsJSON),
 		user.ModelBlocklistEnabled, string(modelBlocklistJSON), user.PolicyVersion,
 		rpmLimit, concurrencyLimit, streamTpsLimit, firstTokenDelayMs,
-		user.CacheExpiresAt, mac,
+		user.CacheExpiresAt, mac, user.RateLimitBonusExpiresAt,
 	).Int()
 	if err != nil {
 		return err
@@ -418,7 +426,7 @@ func PublishUserAuthCache(userId int) error {
 		}
 		previousBase, verifiedBase := authoritative.ToBaseUser(), verified.ToBaseUser()
 		previousBase.Quota, verifiedBase.Quota = 0, 0
-			if reflect.DeepEqual(previousBase, verifiedBase) {
+		if reflect.DeepEqual(previousBase, verifiedBase) {
 			return nil
 		}
 		authoritative = verified

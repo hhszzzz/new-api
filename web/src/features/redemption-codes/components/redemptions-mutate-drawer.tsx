@@ -17,8 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
+import { useQuery } from '@tanstack/react-query'
 import { type FormEvent, useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 
@@ -42,6 +43,13 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   Sheet,
   SheetClose,
   SheetContent,
@@ -50,6 +58,8 @@ import {
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import { getAdminPlans } from '@/features/subscriptions/api'
+import { getGroups } from '@/features/users/api'
 import { useLatestAsyncTask } from '@/hooks/use-latest-async-task'
 import {
   formatQuotaWithCurrency,
@@ -64,8 +74,12 @@ import {
 import { handleServerError } from '@/lib/handle-server-error'
 import { addTimeToDate } from '@/lib/time'
 
-import { createRedemption, updateRedemption, getRedemption } from '../api'
-import { ERROR_MESSAGES, SUCCESS_MESSAGES } from '../constants'
+import { createRedemption, getRedemption, updateRedemption } from '../api'
+import {
+  ERROR_MESSAGES,
+  REDEMPTION_TYPES,
+  SUCCESS_MESSAGES,
+} from '../constants'
 import {
   getRedemptionFormSchema,
   type RedemptionFormValues,
@@ -73,12 +87,39 @@ import {
   transformFormDataToPayload,
   transformRedemptionToFormDefaults,
 } from '../lib'
-import type { Redemption } from '../types'
+import type { Redemption, RedemptionFormData, RedemptionType } from '../types'
 import {
   RedemptionsExportDialog,
   type RedemptionExportData,
 } from './redemptions-export-dialog'
 import { useRedemptions } from './redemptions-provider'
+
+const DEFAULT_GROUP_VALUE = 'use-default-group'
+
+function getRedemptionTypeDetails(
+  data: RedemptionFormData,
+  t: (key: string, options?: Record<string, unknown>) => string,
+  planTitle?: string
+) {
+  switch (data.type) {
+    case 'balance':
+      return t('Balance quota {{quota}}', { quota: formatQuota(data.quota) })
+    case 'subscription':
+      return t('Subscription plan {{id}}', {
+        id: planTitle || data.plan_id,
+      })
+    case 'rate_limit':
+      return t('RPM +{{rpm}}, concurrency +{{concurrency}} for {{days}} days', {
+        rpm: data.rpm_delta,
+        concurrency: data.concurrency_delta,
+        days: Math.round((data.validity_seconds ?? 0) / 86400),
+      })
+    case 'registration':
+      return t('Registration group {{group}}', {
+        group: data.target_group || t('Default'),
+      })
+  }
+}
 
 type RedemptionsMutateDrawerProps = {
   open: boolean
@@ -112,6 +153,17 @@ export function RedemptionsMutateDrawer({
   const form = useForm<RedemptionFormValues>({
     resolver: zodResolver(getRedemptionFormSchema(t)),
     defaultValues: REDEMPTION_FORM_DEFAULT_VALUES,
+  })
+  const selectedType = useWatch({ control: form.control, name: 'type' })
+  const { data: plansResult } = useQuery({
+    queryKey: ['admin-subscription-plans'],
+    queryFn: getAdminPlans,
+    enabled: open && !isUpdate && selectedType === 'subscription',
+  })
+  const { data: groupsResult } = useQuery({
+    queryKey: ['user-groups'],
+    queryFn: getGroups,
+    enabled: open && !isUpdate && selectedType === 'registration',
   })
 
   const submitKey = `${open ? 'open' : 'closed'}:${redemptionId ?? ''}`
@@ -225,12 +277,24 @@ export function RedemptionsMutateDrawer({
               : t(SUCCESS_MESSAGES.REDEMPTION_CREATED)
           )
           if (result.data?.length) {
+            const selectedPlanTitle = plansResult?.data?.find(
+              ({ plan }) => plan.id === basePayload.plan_id
+            )?.plan.title
             setCreatedCodes({
               keys: result.data,
               name: basePayload.name,
-              quota: formatQuotaWithCurrency(basePayload.quota, {
-                abbreviate: false,
-              }),
+              quota:
+                basePayload.type === 'balance'
+                  ? formatQuotaWithCurrency(basePayload.quota, {
+                      abbreviate: false,
+                    })
+                  : undefined,
+              details: getRedemptionTypeDetails(
+                basePayload,
+                t,
+                selectedPlanTitle
+              ),
+              batchId: result.batch_id,
             })
           }
           onOpenChange(false)
@@ -250,7 +314,7 @@ export function RedemptionsMutateDrawer({
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     if (!isUpdate) {
       const name = form.getValues('name')
-      if (!name?.trim()) {
+      if (!name?.trim() && form.getValues('type') === 'balance') {
         const quota = parseQuotaFromDollars(form.getValues('quota_dollars'))
         form.setValue('name', formatQuota(quota), { shouldValidate: true })
       }
@@ -331,43 +395,319 @@ export function RedemptionsMutateDrawer({
                           <Input {...field} placeholder={t('Enter a name')} />
                         </FormControl>
                         <FormDescription>
-                          {t('Name for this redemption code (1-20 characters)')}
+                          {t(
+                            'Name for this redemption batch (1-64 characters)'
+                          )}
                         </FormDescription>
                         <FormMessage />
                       </FormItem>
                     )}
                   />
 
-                  <FormField
-                    control={form.control}
-                    name='quota_dollars'
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>{quotaLabel}</FormLabel>
-                        <FormControl>
-                          <Input
-                            {...field}
-                            type='number'
-                            step={quotaStep}
-                            placeholder={quotaPlaceholder}
-                            onChange={(e) =>
-                              field.onChange(
-                                Number.parseFloat(e.target.value) || 0
-                              )
+                  {!isUpdate && (
+                    <FormField
+                      control={form.control}
+                      name='type'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Code type')}</FormLabel>
+                          <Select
+                            value={field.value}
+                            onValueChange={(value) =>
+                              field.onChange(value as RedemptionType)
                             }
-                          />
-                        </FormControl>
-                        <FormDescription>
-                          {tokensOnly
-                            ? t('Enter the quota amount in tokens')
-                            : t('Enter the quota amount in {{currency}}', {
-                                currency: currencyLabel,
-                              })}
-                        </FormDescription>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue
+                                  placeholder={t('Select a code type')}
+                                />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {REDEMPTION_TYPES.map((option) => (
+                                <SelectItem
+                                  key={option.value}
+                                  value={option.value}
+                                >
+                                  {t(option.labelKey)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {selectedType === 'balance' && (
+                    <FormField
+                      control={form.control}
+                      name='quota_dollars'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{quotaLabel}</FormLabel>
+                          <FormControl>
+                            <Input
+                              {...field}
+                              type='number'
+                              step={quotaStep}
+                              placeholder={quotaPlaceholder}
+                              onChange={(e) =>
+                                field.onChange(
+                                  Number.parseFloat(e.target.value) || 0
+                                )
+                              }
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            {tokensOnly
+                              ? t('Enter the quota amount in tokens')
+                              : t('Enter the quota amount in {{currency}}', {
+                                  currency: currencyLabel,
+                                })}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {selectedType === 'subscription' && !isUpdate && (
+                    <FormField
+                      control={form.control}
+                      name='plan_id'
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>{t('Subscription plan')}</FormLabel>
+                          <Select
+                            value={field.value > 0 ? String(field.value) : ''}
+                            onValueChange={(value) =>
+                              field.onChange(Number(value))
+                            }
+                          >
+                            <FormControl>
+                              <SelectTrigger>
+                                <SelectValue
+                                  placeholder={t('Select a subscription plan')}
+                                />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {(plansResult?.data ?? []).map(({ plan }) => (
+                                <SelectItem
+                                  key={plan.id}
+                                  value={String(plan.id)}
+                                >
+                                  {plan.title}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            {t(
+                              'The issued code keeps a snapshot of this plan.'
+                            )}
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
+                  {selectedType === 'rate_limit' && !isUpdate && (
+                    <>
+                      <div className='grid gap-4 sm:grid-cols-2'>
+                        <FormField
+                          control={form.control}
+                          name='rpm_delta'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('RPM increase')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={0}
+                                  step={1}
+                                  {...field}
+                                  onChange={(event) =>
+                                    field.onChange(
+                                      Number(event.target.value) || 0
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='concurrency_delta'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Concurrency increase')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={0}
+                                  step={1}
+                                  {...field}
+                                  onChange={(event) =>
+                                    field.onChange(
+                                      Number(event.target.value) || 0
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                      <FormField
+                        control={form.control}
+                        name='validity_days'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Bonus validity in days')}</FormLabel>
+                            <FormControl>
+                              <Input
+                                type='number'
+                                min={1}
+                                max={3650}
+                                step={1}
+                                {...field}
+                                onChange={(event) =>
+                                  field.onChange(
+                                    Number(event.target.value) || 0
+                                  )
+                                }
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </>
+                  )}
+
+                  {selectedType === 'registration' && !isUpdate && (
+                    <>
+                      <FormField
+                        control={form.control}
+                        name='target_group'
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t('Initial primary group')}</FormLabel>
+                            <Select
+                              value={
+                                field.value
+                                  ? `group:${field.value}`
+                                  : DEFAULT_GROUP_VALUE
+                              }
+                              onValueChange={(value) =>
+                                field.onChange(
+                                  value == null || value === DEFAULT_GROUP_VALUE
+                                    ? ''
+                                    : value.slice('group:'.length)
+                                )
+                              }
+                            >
+                              <FormControl>
+                                <SelectTrigger>
+                                  <SelectValue
+                                    placeholder={t('Use the default group')}
+                                  />
+                                </SelectTrigger>
+                              </FormControl>
+                              <SelectContent>
+                                <SelectItem value={DEFAULT_GROUP_VALUE}>
+                                  {t('Use the default group')}
+                                </SelectItem>
+                                {(groupsResult?.data ?? []).map((group) => (
+                                  <SelectItem
+                                    key={group}
+                                    value={`group:${group}`}
+                                  >
+                                    {group}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <div className='grid gap-4 sm:grid-cols-2'>
+                        <FormField
+                          control={form.control}
+                          name='initial_rpm_limit'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>{t('Initial RPM limit')}</FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={0}
+                                  step={1}
+                                  {...field}
+                                  value={field.value ?? ''}
+                                  onChange={(event) =>
+                                    field.onChange(
+                                      event.target.value === ''
+                                        ? null
+                                        : Number(event.target.value) || 0
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Leave blank to use the configured default; 0 means no personal limit.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                        <FormField
+                          control={form.control}
+                          name='initial_concurrency_limit'
+                          render={({ field }) => (
+                            <FormItem>
+                              <FormLabel>
+                                {t('Initial concurrency limit')}
+                              </FormLabel>
+                              <FormControl>
+                                <Input
+                                  type='number'
+                                  min={0}
+                                  step={1}
+                                  {...field}
+                                  value={field.value ?? ''}
+                                  onChange={(event) =>
+                                    field.onChange(
+                                      event.target.value === ''
+                                        ? null
+                                        : Number(event.target.value) || 0
+                                    )
+                                  }
+                                />
+                              </FormControl>
+                              <FormDescription>
+                                {t(
+                                  'Leave blank to use the configured default; 0 means no personal limit.'
+                                )}
+                              </FormDescription>
+                              <FormMessage />
+                            </FormItem>
+                          )}
+                        />
+                      </div>
+                    </>
+                  )}
 
                   <FormField
                     control={form.control}

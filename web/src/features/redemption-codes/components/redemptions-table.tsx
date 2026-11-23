@@ -27,8 +27,10 @@ import {
   DISABLED_ROW_MOBILE,
   DataTablePage,
   useDataTable,
+  useDebouncedColumnFilter,
   usePersistedTableSorting,
 } from '@/components/data-table'
+import { Input } from '@/components/ui/input'
 import { useMediaQuery } from '@/hooks'
 import { useTableUrlState } from '@/hooks/use-table-url-state'
 import { createServerError } from '@/lib/server-error-message'
@@ -37,6 +39,7 @@ import { getRedemptions, searchRedemptions } from '../api'
 import {
   ERROR_MESSAGES,
   REDEMPTION_STATUS,
+  REDEMPTION_TYPES,
   getRedemptionStatusOptions,
 } from '../constants'
 import { isRedemptionExpired } from '../lib'
@@ -94,13 +97,31 @@ export function RedemptionsTable() {
       pageSizeStorageKey: 'redemption-codes:admin:page-size',
     },
     globalFilter: { enabled: true, key: 'filter' },
-    columnFilters: [{ columnId: 'status', searchKey: 'status', type: 'array' }],
+    columnFilters: [
+      { columnId: 'status', searchKey: 'status', type: 'array' },
+      { columnId: 'type', searchKey: 'type', type: 'array' },
+      { columnId: '_batchSearch', searchKey: 'batch_id', type: 'string' },
+    ],
   })
   const statusFilter =
     (columnFilters.find((filter) => filter.id === 'status')?.value as
       | string[]
       | undefined) ?? []
   const statusFilterValue = statusFilter[0] ?? ''
+  const typeFilter =
+    (columnFilters.find((filter) => filter.id === 'type')?.value as
+      | string[]
+      | undefined) ?? []
+  const typeFilterValue = typeFilter[0] ?? ''
+  const {
+    value: batchIdFilter,
+    inputValue: batchIdInput,
+    setInputValue: setBatchIdInput,
+  } = useDebouncedColumnFilter({
+    columnFilters,
+    columnId: '_batchSearch',
+    onColumnFiltersChange,
+  })
   const sortParams = useMemo(() => {
     const activeSort = sorting[0]
     if (
@@ -130,12 +151,21 @@ export function RedemptionsTable() {
       pagination.pageSize,
       globalFilter,
       statusFilterValue,
+      typeFilterValue,
+      batchIdFilter,
       sortParams,
       refreshTrigger,
     ],
     queryFn: async () => {
       const hasFilter = globalFilter?.trim()
       const hasStatusFilter = statusFilterValue !== ''
+      const hasTypeFilter = typeFilterValue !== ''
+      const batchIdValue = Number.parseInt(batchIdFilter, 10)
+      const batchId =
+        Number.isInteger(batchIdValue) && batchIdValue > 0
+          ? batchIdValue
+          : undefined
+      const hasBatchFilter = batchId !== undefined
       const params = {
         p: pagination.pageIndex + 1,
         page_size: pagination.pageSize,
@@ -143,11 +173,13 @@ export function RedemptionsTable() {
       }
 
       const result =
-        hasFilter || hasStatusFilter
+        hasFilter || hasStatusFilter || hasTypeFilter || hasBatchFilter
           ? await searchRedemptions({
               ...params,
               keyword: globalFilter,
               status: statusFilterValue,
+              type: typeFilterValue as (typeof REDEMPTION_TYPES)[number]['value'],
+              batch_id: batchId,
             })
           : await getRedemptions(params)
 
@@ -155,7 +187,7 @@ export function RedemptionsTable() {
         throw createServerError(
           result,
           t(
-            hasFilter || hasStatusFilter
+            hasFilter || hasStatusFilter || hasTypeFilter || hasBatchFilter
               ? ERROR_MESSAGES.SEARCH_FAILED
               : ERROR_MESSAGES.LOAD_FAILED
           )
@@ -205,6 +237,14 @@ export function RedemptionsTable() {
     () => getRedemptionStatusOptions(t),
     [t]
   )
+  const redemptionTypeOptions = useMemo(
+    () =>
+      REDEMPTION_TYPES.map((option) => ({
+        label: t(option.labelKey),
+        value: option.value,
+      })),
+    [t]
+  )
 
   return (
     <DataTablePage
@@ -221,11 +261,28 @@ export function RedemptionsTable() {
       toolbarProps={{
         searchPlaceholder: t('Filter by name or ID...'),
         searchDebounceMs: 500,
+        additionalSearch: (
+          <Input
+            type='number'
+            min={1}
+            placeholder={t('Batch ID')}
+            aria-label={t('Batch ID')}
+            value={batchIdInput}
+            onChange={(event) => setBatchIdInput(event.target.value)}
+            className='w-full sm:w-32'
+          />
+        ),
         filters: [
           {
             columnId: 'status',
             title: t('Status'),
             options: redemptionStatusOptions,
+            singleSelect: true,
+          },
+          {
+            columnId: 'type',
+            title: t('Code type'),
+            options: redemptionTypeOptions,
             singleSelect: true,
           },
         ],

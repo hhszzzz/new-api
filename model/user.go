@@ -11,6 +11,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
@@ -733,6 +734,16 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 	user.Email = NormalizeEmail(user.Email)
 	if err := ensureEmailAvailableWithTx(tx, user.Email, 0); err != nil {
 		return err
+	}
+	if user.Role == common.RoleCommonUser {
+		if defaults := group_rate_limit_setting.GetSettingSnapshot(); defaults != nil {
+			if user.RpmLimit == nil && defaults.DefaultNewUserRPMLimit > 0 {
+				user.RpmLimit = common.GetPointer(defaults.DefaultNewUserRPMLimit)
+			}
+			if user.ConcurrencyLimit == nil && defaults.DefaultNewUserConcurrencyLimit > 0 {
+				user.ConcurrencyLimit = common.GetPointer(defaults.DefaultNewUserConcurrencyLimit)
+			}
+		}
 	}
 	if user.Password == "" {
 		return nil

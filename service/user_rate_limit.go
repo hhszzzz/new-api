@@ -5,13 +5,15 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"github.com/QuantumNous/new-api/i18n"
-	hosttypes "github.com/QuantumNous/new-api/types"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/QuantumNous/new-api/i18n"
+	hosttypes "github.com/QuantumNous/new-api/types"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -346,6 +348,22 @@ func LoadUserRateLimitPolicy(userID int, groupOverride ...string) (UserRateLimit
 	}
 	if user.FirstTokenDelayMs != nil {
 		userFirstTokenDelayMs = *user.FirstTokenDelayMs
+	}
+	rpmBonus, concurrencyBonus, _, err := model.GetActiveRedemptionRateBonuses(userID)
+	if err != nil {
+		return UserRateLimitPolicy{}, err
+	}
+	if userRPM > 0 && rpmBonus > 0 {
+		if int64(userRPM)+int64(rpmBonus) > math.MaxInt32 {
+			return UserRateLimitPolicy{}, fmt.Errorf("active RPM bonus exceeds the supported limit")
+		}
+		userRPM += rpmBonus
+	}
+	if userConcurrency > 0 && concurrencyBonus > 0 {
+		if int64(userConcurrency)+int64(concurrencyBonus) > math.MaxInt32 {
+			return UserRateLimitPolicy{}, fmt.Errorf("active concurrency bonus exceeds the supported limit")
+		}
+		userConcurrency += concurrencyBonus
 	}
 	return buildUserRateLimitPolicy(userID, group, userRPM, userConcurrency, userStreamTPS, userFirstTokenDelayMs), nil
 }

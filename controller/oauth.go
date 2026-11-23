@@ -15,26 +15,32 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-const oauthAuthFlowTTL = 10 * time.Minute
+const (
+	oauthAuthFlowTTL          = 10 * time.Minute
+	maxRegistrationCodeLength = 128
+)
 
 type oauthStateRequest struct {
-	Provider string          `json:"provider"`
-	Intent   string          `json:"intent"`
-	Aff      string          `json:"aff,omitempty"`
-	Scope    string          `json:"scope,omitempty"`
-	Context  json.RawMessage `json:"context,omitempty"`
+	Provider         string          `json:"provider"`
+	Intent           string          `json:"intent"`
+	Aff              string          `json:"aff,omitempty"`
+	RegistrationCode string          `json:"registration_code,omitempty"`
+	Scope            string          `json:"scope,omitempty"`
+	Context          json.RawMessage `json:"context,omitempty"`
 }
 
 type oauthFlowPayload struct {
-	AffiliateCode   string                         `json:"affiliate_code,omitempty"`
-	Verification    *service.OAuthVerificationFlow `json:"verification,omitempty"`
-	Telegram        *oauth.TelegramOAuthFlow       `json:"telegram,omitempty"`
-	SessionIdentity *service.AuthIdentity          `json:"session_identity,omitempty"`
-	Authorization   *model.AuthFlowAuthorization   `json:"authorization,omitempty"`
+	AffiliateCode          string                         `json:"affiliate_code,omitempty"`
+	RegistrationCodeDigest string                         `json:"registration_code_digest,omitempty"`
+	Verification           *service.OAuthVerificationFlow `json:"verification,omitempty"`
+	Telegram               *oauth.TelegramOAuthFlow       `json:"telegram,omitempty"`
+	SessionIdentity        *service.AuthIdentity          `json:"session_identity,omitempty"`
+	Authorization          *model.AuthFlowAuthorization   `json:"authorization,omitempty"`
 }
 
 // providerParams returns the params of messages that name the OAuth provider.
@@ -52,10 +58,12 @@ func GenerateOAuthCode(c *gin.Context) {
 	request.Provider = strings.TrimSpace(request.Provider)
 	request.Intent = strings.TrimSpace(request.Intent)
 	request.Aff = strings.TrimSpace(request.Aff)
+	request.RegistrationCode = strings.TrimSpace(request.RegistrationCode)
 	if oauth.GetProvider(request.Provider) == nil ||
-		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentBind && request.Intent != model.AuthFlowIntentVerify) ||
+		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentRegister && request.Intent != model.AuthFlowIntentBind && request.Intent != model.AuthFlowIntentVerify) ||
 		len(request.Aff) > 32 ||
-		(request.Intent != model.AuthFlowIntentLogin && request.Aff != "") ||
+		(request.Intent != model.AuthFlowIntentLogin && request.Intent != model.AuthFlowIntentRegister && request.Aff != "") ||
+		(request.Intent != model.AuthFlowIntentRegister && request.RegistrationCode != "") || len(request.RegistrationCode) > maxRegistrationCodeLength ||
 		(request.Intent != model.AuthFlowIntentVerify && (request.Scope != "" || len(request.Context) != 0)) {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
@@ -63,6 +71,9 @@ func GenerateOAuthCode(c *gin.Context) {
 	userID := 0
 	sessionID := ""
 	flowPayload := oauthFlowPayload{AffiliateCode: request.Aff}
+	if request.RegistrationCode != "" {
+		flowPayload.RegistrationCodeDigest = model.RedemptionCodeDigest(request.RegistrationCode)
+	}
 	bindingStarted := false
 	if request.Provider == "telegram" {
 		telegramFlow, err := oauth.NewTelegramOAuthFlow()
@@ -198,7 +209,7 @@ func HandleOAuth(c *gin.Context) {
 				return
 			}
 		}
-	} else if pendingFlow.Intent != model.AuthFlowIntentLogin {
+	} else if pendingFlow.Intent != model.AuthFlowIntentLogin && pendingFlow.Intent != model.AuthFlowIntentRegister {
 		common.ApiErrorT(c, "Invalid parameters")
 		return
 	}
@@ -214,7 +225,7 @@ func HandleOAuth(c *gin.Context) {
 			writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
 			return
 		}
-		if pendingFlow.Intent != model.AuthFlowIntentLogin {
+		if pendingFlow.Intent == model.AuthFlowIntentBind || pendingFlow.Intent == model.AuthFlowIntentVerify {
 			identity, _ := middleware.GetSessionAuthIdentity(c)
 			if telegramPayload.SessionIdentity == nil || *telegramPayload.SessionIdentity != identity {
 				writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
@@ -282,7 +293,7 @@ func HandleOAuth(c *gin.Context) {
 	}
 
 	switch flow.Intent {
-	case model.AuthFlowIntentLogin:
+	case model.AuthFlowIntentLogin, model.AuthFlowIntentRegister:
 		handleOAuthLogin(c, provider, oauthUser, token, flow)
 	case model.AuthFlowIntentVerify:
 		handleOAuthVerification(c, providerName, oauthUser, flow)
@@ -312,8 +323,17 @@ func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.
 		writeSecurityOperationError(c, err)
 		return
 	}
-	user, migration, err := findOrCreateOAuthUser(c, provider, oauthUser, token, payload.AffiliateCode)
+	user, migration, err := findOrCreateOAuthUser(c, provider, oauthUser, token, payload.AffiliateCode, payload.RegistrationCodeDigest)
 	if err != nil {
+		registrationCodesRequired := false
+		if rateLimitSettings := group_rate_limit_setting.GetSettingSnapshot(); rateLimitSettings != nil {
+			registrationCodesRequired = rateLimitSettings.RegistrationCodeRequired
+		}
+		_, emailTaken := err.(*OAuthEmailAlreadyTakenError)
+		if registrationCodesRequired && (emailTaken || errors.Is(err, model.ErrEmailAlreadyTaken)) {
+			common.ApiErrorT(c, "Registration failed, please try again")
+			return
+		}
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorT(c, "Email address is already in use")
 			return
@@ -328,6 +348,10 @@ func handleOAuthLogin(c *gin.Context, provider oauth.Provider, oauthUser *oauth.
 		case *OAuthLegacyBindingNotConfirmedError:
 			common.ApiErrorT(c, "This {{provider}} account cannot be linked to an existing account automatically, please sign in or register another way and then link {{provider}} in account settings", providerParams(provider.GetName()))
 		default:
+			if errors.Is(err, model.ErrRegistrationCodeInvalid) {
+				common.ApiErrorT(c, "Registration failed, please try again")
+				return
+			}
 			writeSecurityOperationError(c, err)
 		}
 		return
@@ -396,7 +420,11 @@ func handleOAuthBind(c *gin.Context, providerName string, provider oauth.Provide
 // findOrCreateOAuthUser finds the existing user or creates a new one. For a
 // legacy GitHub binding that still waits for the login verification, it also
 // returns the rewrite to carry into the challenge.
-func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, affiliateCode string) (*model.User, *service.LegacyGitHubMigration, error) {
+func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *oauth.OAuthUser, token *oauth.OAuthToken, affiliateCode string, registrationCodeDigests ...string) (*model.User, *service.LegacyGitHubMigration, error) {
+	registrationCodeDigest := ""
+	if len(registrationCodeDigests) > 0 {
+		registrationCodeDigest = registrationCodeDigests[0]
+	}
 	user := &model.User{}
 	if provider.ProviderUserIDColumn() == "telegram_id" {
 		err := provider.FillUserByProviderID(user, oauthUser.ProviderUserID)
@@ -479,15 +507,22 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 	if !common.RegisterEnabled {
 		return nil, nil, &OAuthRegistrationDisabledError{}
 	}
+	registrationCodesRequired := false
+	if rateLimitSettings := group_rate_limit_setting.GetSettingSnapshot(); rateLimitSettings != nil {
+		registrationCodesRequired = rateLimitSettings.RegistrationCodeRequired
+	}
+	registrationEmailTaken := false
 
 	// Set up new user
 	user.Username = provider.GetProviderPrefix() + strconv.Itoa(model.GetMaxUserId()+1)
 
 	if oauthUser.Username != "" {
-		if exists, err := model.CheckUserExistOrDeleted(oauthUser.Username, ""); err == nil && !exists {
-			// 防止索引退化
-			if len(oauthUser.Username) <= model.UserNameMaxLength {
-				user.Username = oauthUser.Username
+		if !registrationCodesRequired {
+			if exists, err := model.CheckUserExistOrDeleted(oauthUser.Username, ""); err == nil && !exists {
+				// 防止索引退化
+				if len(oauthUser.Username) <= model.UserNameMaxLength {
+					user.Username = oauthUser.Username
+				}
 			}
 		}
 	}
@@ -503,9 +538,23 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		user.Email = model.NormalizeEmail(oauthUser.Email)
 		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
-				return nil, nil, &OAuthEmailAlreadyTakenError{}
+				if registrationCodesRequired {
+					registrationEmailTaken = true
+				} else {
+					return nil, nil, &OAuthEmailAlreadyTakenError{}
+				}
+			} else {
+				return nil, nil, err
 			}
+		}
+	}
+	if registrationCodesRequired {
+		registrationCodeUsable, err := model.IsRegistrationCodeUsable(registrationCodeDigest)
+		if err != nil {
 			return nil, nil, err
+		}
+		if registrationEmailTaken || !registrationCodeUsable {
+			return nil, nil, model.ErrRegistrationCodeInvalid
 		}
 	}
 	user.Role = common.RoleCommonUser
@@ -523,7 +572,11 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		// Custom provider: create user and binding in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			// Create user
-			if err := user.InsertWithTx(tx, inviterId); err != nil {
+			if registrationCodesRequired {
+				if err := user.InsertWithRegistrationCodeTx(tx, registrationCodeDigest, inviterId); err != nil {
+					return err
+				}
+			} else if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
 			}
 
@@ -549,7 +602,11 @@ func findOrCreateOAuthUser(c *gin.Context, provider oauth.Provider, oauthUser *o
 		// Built-in provider: create user and update provider ID in a transaction
 		err := model.DB.Transaction(func(tx *gorm.DB) error {
 			// Create user
-			if err := user.InsertWithTx(tx, inviterId); err != nil {
+			if registrationCodesRequired {
+				if err := user.InsertWithRegistrationCodeTx(tx, registrationCodeDigest, inviterId); err != nil {
+					return err
+				}
+			} else if err := user.InsertWithTx(tx, inviterId); err != nil {
 				return err
 			}
 

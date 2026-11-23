@@ -28,7 +28,9 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 export type RedemptionExportData = {
   keys: string[]
   name: string
-  quota: string
+  quota?: string
+  details?: string
+  batchId?: number
 }
 
 type RedemptionsExportDialogProps = {
@@ -42,7 +44,7 @@ export function RedemptionsExportDialog(props: RedemptionsExportDialogProps) {
   const [saveToFile, setSaveToFile] = useState(false)
   const [format, setFormat] = useState<'txt' | 'md'>('txt')
   const [includeName, setIncludeName] = useState(true)
-  const [includeQuota, setIncludeQuota] = useState(true)
+  const [includeQuota, setIncludeQuota] = useState(Boolean(props.data.quota))
 
   const handleComplete = () => {
     if (!saveToFile) {
@@ -52,13 +54,13 @@ export function RedemptionsExportDialog(props: RedemptionsExportDialogProps) {
     const headers: string[] = []
     if (includeName) headers.push(t('Name'))
     headers.push(t('Code'))
-    if (includeQuota) headers.push(t('Quota'))
+    if (includeQuota && props.data.quota) headers.push(t('Quota'))
 
     const rows = props.data.keys.map((key) => {
       const row: string[] = []
       if (includeName) row.push(props.data.name)
       row.push(key)
-      if (includeQuota) row.push(props.data.quota)
+      if (includeQuota && props.data.quota) row.push(props.data.quota)
       return row.map((value) => value.replaceAll(/[\t\r\n]+/g, ' '))
     })
 
@@ -118,6 +120,14 @@ export function RedemptionsExportDialog(props: RedemptionsExportDialogProps) {
         />
         <Label htmlFor={`${id}-save-file`}>{t('Save as a file')}</Label>
       </div>
+      {props.data.details && (
+        <p className='text-muted-foreground text-sm'>{props.data.details}</p>
+      )}
+      {props.data.batchId && (
+        <p className='text-muted-foreground font-mono text-xs'>
+          {t('Batch ID: {{id}}', { id: props.data.batchId })}
+        </p>
+      )}
       {saveToFile && (
         <div className='space-y-4 pl-6'>
           <RadioGroup
@@ -152,14 +162,16 @@ export function RedemptionsExportDialog(props: RedemptionsExportDialogProps) {
               />
               <Label htmlFor={`${id}-name`}>{t('Include name')}</Label>
             </div>
-            <div className='flex items-center gap-2'>
-              <Checkbox
-                id={`${id}-quota`}
-                checked={includeQuota}
-                onCheckedChange={setIncludeQuota}
-              />
-              <Label htmlFor={`${id}-quota`}>{t('Include quota')}</Label>
-            </div>
+            {props.data.quota && (
+              <div className='flex items-center gap-2'>
+                <Checkbox
+                  id={`${id}-quota`}
+                  checked={includeQuota}
+                  onCheckedChange={setIncludeQuota}
+                />
+                <Label htmlFor={`${id}-quota`}>{t('Include quota')}</Label>
+              </div>
+            )}
           </div>
         </div>
       )}

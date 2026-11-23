@@ -841,7 +841,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 	if source == "" {
 		source = "order"
 	}
-	if plan.MaxPurchasePerUser > 0 && source != "admin" {
+	if plan.MaxPurchasePerUser > 0 && source != "admin" && source != "redemption" {
 		var count int64
 		if err := tx.Model(&UserSubscription{}).
 			Where("user_id = ? AND plan_id = ?", userId, plan.Id).
@@ -852,7 +852,7 @@ func CreateUserSubscriptionFromPlanTx(tx *gorm.DB, userId int, plan *Subscriptio
 			return nil, i18n.NewError(i18n.MsgSubscriptionPurchaseMax, nil)
 		}
 	}
-	nowUnix := GetDBTimestamp()
+	nowUnix := getDBTimestamp(tx)
 	now := time.Unix(nowUnix, 0)
 	endUnix, err := calcPlanEndTime(now, plan)
 	if err != nil {

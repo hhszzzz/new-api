@@ -371,6 +371,7 @@ func migrateDB() error {
 		&Option{},
 		&LoginEncryptionKey{},
 		&Redemption{},
+		&RedemptionBatch{},
 		&Ability{},
 		&Log{},
 		&Midjourney{},
@@ -413,6 +414,9 @@ func migrateDB() error {
 		&UserAccessToken{},
 	)
 	if err != nil {
+		return err
+	}
+	if err := MigrateRedemptionCodeMetadata(); err != nil {
 		return err
 	}
 	if err := InitializeUserAuthVersions(); err != nil {

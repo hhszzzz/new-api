@@ -11,10 +11,13 @@ import (
 )
 
 const (
-	ConfigName                 = "group_rate_limit_setting"
-	MemberEnabledOptionKey     = ConfigName + ".member_enabled"
-	SharedPoolEnabledOptionKey = ConfigName + ".shared_pool_enabled"
-	PoliciesOptionKey          = ConfigName + ".policies"
+	ConfigName                         = "group_rate_limit_setting"
+	MemberEnabledOptionKey             = ConfigName + ".member_enabled"
+	SharedPoolEnabledOptionKey         = ConfigName + ".shared_pool_enabled"
+	PoliciesOptionKey                  = ConfigName + ".policies"
+	RegistrationCodeRequiredOptionKey  = ConfigName + ".registration_code_required"
+	DefaultNewUserRPMOptionKey         = ConfigName + ".default_new_user_rpm"
+	DefaultNewUserConcurrencyOptionKey = ConfigName + ".default_new_user_concurrency"
 )
 
 type Limits struct {
@@ -29,10 +32,19 @@ type GroupPolicy struct {
 	SharedPool   Limits `json:"shared_pool"`
 }
 
+type NewUserSettings struct {
+	RegistrationCodeRequired       bool
+	DefaultNewUserRPMLimit         int
+	DefaultNewUserConcurrencyLimit int
+}
+
 type Setting struct {
-	MemberEnabled     bool                   `json:"member_enabled"`
-	SharedPoolEnabled bool                   `json:"shared_pool_enabled"`
-	Policies          map[string]GroupPolicy `json:"policies"`
+	MemberEnabled                  bool                   `json:"member_enabled"`
+	SharedPoolEnabled              bool                   `json:"shared_pool_enabled"`
+	Policies                       map[string]GroupPolicy `json:"policies"`
+	RegistrationCodeRequired       bool                   `json:"registration_code_required"`
+	DefaultNewUserRPMLimit         int                    `json:"default_new_user_rpm"`
+	DefaultNewUserConcurrencyLimit int                    `json:"default_new_user_concurrency"`
 }
 
 var groupRateLimitSetting = Setting{
@@ -60,6 +72,10 @@ func GetGroupPolicy(group string) (GroupPolicy, bool) {
 }
 
 func (setting *Setting) ValidateConfig() error {
+	if setting.DefaultNewUserRPMLimit < 0 || int64(setting.DefaultNewUserRPMLimit) > math.MaxInt32 ||
+		setting.DefaultNewUserConcurrencyLimit < 0 || int64(setting.DefaultNewUserConcurrencyLimit) > math.MaxInt32 {
+		return fmt.Errorf("new-user rate limits must be between 0 and 2147483647")
+	}
 	seenGroups := make(map[string]struct{}, len(setting.Policies))
 	for group, policy := range setting.Policies {
 		normalizedGroup := strings.TrimSpace(group)

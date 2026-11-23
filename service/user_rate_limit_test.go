@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 	"github.com/alicebob/miniredis/v2"
@@ -149,6 +150,66 @@ func TestUserRateLimitPolicyUsesTokenGroupAndIndependentSwitches(t *testing.T) {
 	policy = UserRateLimitPolicyFromContext(c)
 	assert.Zero(t, policy.RPMLimit, "the disabled member switch must preserve but not enforce its values")
 	assert.Equal(t, 600, policy.SharedRPMLimit)
+}
+
+func TestLoadUserRateLimitPolicyAddsBonusesBeforeGroupCaps(t *testing.T) {
+	useUserRateLimitMiniRedis(t)
+	user := setupAuthSessionTestDB(t)
+	require.NoError(t, model.DB.AutoMigrate(&model.Redemption{}))
+	baseRPM, baseConcurrency := 40, 1
+	require.NoError(t, model.DB.Model(user).Updates(map[string]any{
+		"rpm_limit": baseRPM, "concurrency_limit": baseConcurrency,
+	}).Error)
+	useGroupRateLimitSetting(t, group_rate_limit_setting.Setting{
+		MemberEnabled: true,
+		Policies: map[string]group_rate_limit_setting.GroupPolicy{
+			"group-a": {MemberLimits: group_rate_limit_setting.Limits{ConcurrencyLimit: rateLimitInt(1)}},
+		},
+	})
+	now := common.GetTimestamp()
+	grant := model.Redemption{
+		Key: "00000000000000000000000000000041", Type: model.RedemptionTypeRateLimit,
+		Status: common.RedemptionCodeStatusUsed, UsedUserId: user.Id, RPMDelta: 10,
+		ConcurrencyDelta: 2, RedeemedTime: now, ValiditySeconds: 3600,
+	}
+	require.NoError(t, model.DB.Create(&grant).Error)
+
+	groupA, err := LoadUserRateLimitPolicy(user.Id, "group-a")
+	require.NoError(t, err)
+	assert.Equal(t, 50, groupA.UserRPMLimit)
+	assert.Equal(t, 3, groupA.UserConcurrencyLimit)
+	assert.Equal(t, 1, groupA.MemberConcurrencyLimit)
+	assert.Equal(t, 1, groupA.ConcurrencyLimit, "the group member ceiling still wins")
+
+	groupB, err := LoadUserRateLimitPolicy(user.Id, "group-b")
+	require.NoError(t, err)
+	assert.Equal(t, 3, groupB.ConcurrencyLimit, "the user-wide bonus is available outside the capped group")
+
+	config := userConcurrencyConfig{
+		leaseTTL: time.Second, renewEvery: time.Second, waitTimeout: 20 * time.Millisecond,
+		heartbeat: 5 * time.Millisecond, initialPoll: time.Millisecond,
+		maximumPoll: 2 * time.Millisecond, waitingLimit: 20, groupWaitingLimit: 20,
+	}
+	observation := &UserRateLimitObservation{}
+	groupAContext := newUserRateLimitTestContext(t.Context())
+	groupAFirst, apiErr := acquireRequestConcurrency(groupAContext, groupA, UserConcurrencyWaitOptions{}, observation, config)
+	require.Nil(t, apiErr)
+	require.NotNil(t, groupAFirst)
+	defer groupAFirst.Release()
+
+	_, apiErr = acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), groupA, UserConcurrencyWaitOptions{}, observation, config)
+	require.NotNil(t, apiErr, "group A's member limit remains one")
+
+	groupBFirst, apiErr := acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), groupB, UserConcurrencyWaitOptions{}, observation, config)
+	require.Nil(t, apiErr)
+	require.NotNil(t, groupBFirst)
+	defer groupBFirst.Release()
+	groupBSecond, apiErr := acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), groupB, UserConcurrencyWaitOptions{}, observation, config)
+	require.Nil(t, apiErr, "the user-wide bonus can be used in another group")
+	require.NotNil(t, groupBSecond)
+	defer groupBSecond.Release()
+	_, apiErr = acquireRequestConcurrency(newUserRateLimitTestContext(t.Context()), groupB, UserConcurrencyWaitOptions{}, observation, config)
+	require.NotNil(t, apiErr, "all groups still share the user's total concurrency limit")
 }
 
 func TestUserRPMFixedMinuteWindowAndSharedUserCounter(t *testing.T) {

@@ -121,6 +121,44 @@ func creditTopUpQuota(tx *gorm.DB, userId int, creditedQuota int, updates map[st
 	return ErrTopUpQuotaLimitExceeded
 }
 
+// creditGiftQuota atomically enforces both the wallet ceiling and the user's
+// gift-credit cap. A separate read/check can race when different codes are
+// redeemed concurrently.
+func creditGiftQuota(tx *gorm.DB, userId int, creditedQuota int) error {
+	maxCurrentQuota, err := topUpQuotaMaxCurrent(creditedQuota)
+	if err != nil {
+		return err
+	}
+	result := tx.Model(&User{}).
+		Where("id = ? AND quota <= ? AND (quota_cap IS NULL OR quota + ? <= quota_cap)", userId, maxCurrentQuota, creditedQuota).
+		Update("quota", gorm.Expr("quota + ?", creditedQuota))
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+
+	var user struct {
+		Quota    int
+		QuotaCap *int
+	}
+	if err := tx.Model(&User{}).Select("quota", "quota_cap").Where("id = ?", userId).Take(&user).Error; err != nil {
+		return err
+	}
+	if user.QuotaCap != nil {
+		if user.Quota > *user.QuotaCap ||
+			(user.Quota <= maxCurrentQuota && user.Quota+creditedQuota > *user.QuotaCap) ||
+			(user.Quota > maxCurrentQuota && creditedQuota > *user.QuotaCap-user.Quota) {
+			return ErrQuotaCapExceeded
+		}
+	}
+	if user.Quota > maxCurrentQuota {
+		return ErrTopUpQuotaLimitExceeded
+	}
+	return errors.New("gift quota update was not applied")
+}
+
 func (topUp *TopUp) Update() error {
 	var err error
 	err = DB.Save(topUp).Error

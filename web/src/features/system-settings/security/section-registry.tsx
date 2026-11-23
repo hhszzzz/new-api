@@ -1,3 +1,5 @@
+import { DistributionRiskSettingsSection } from '@/features/distribution-risk/settings-section'
+
 /*
 Copyright (C) 2023-2026 QuantumNous
 
@@ -38,7 +40,6 @@ For commercial licensing, please contact support@quantumnous.com
 import { RateLimitSection } from '../request-limits/rate-limit-section'
 import { SSRFSection } from '../request-limits/ssrf-section'
 import { TokenLimitSection } from '../request-limits/token-limit-section'
-import { DistributionRiskSettingsSection } from '@/features/distribution-risk/settings-section'
 import type { SecuritySettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -62,6 +63,12 @@ const SECURITY_SECTIONS = [
             settings['group_rate_limit_setting.shared_pool_enabled'],
           'group_rate_limit_setting.policies':
             settings['group_rate_limit_setting.policies'],
+          'group_rate_limit_setting.registration_code_required':
+            settings['group_rate_limit_setting.registration_code_required'],
+          'group_rate_limit_setting.default_new_user_rpm':
+            settings['group_rate_limit_setting.default_new_user_rpm'],
+          'group_rate_limit_setting.default_new_user_concurrency':
+            settings['group_rate_limit_setting.default_new_user_concurrency'],
         }}
       />
     ),

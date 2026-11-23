@@ -29,6 +29,16 @@ export const redemptionSchema = z.object({
   key: z.string(),
   status: z.number(), // 1: enabled, 2: disabled, 3: used
   quota: z.number(),
+  type: z
+    .enum(['balance', 'subscription', 'rate_limit', 'registration'])
+    .optional(),
+  batch_id: z.number().optional(),
+  rpm_delta: z.number().optional(),
+  concurrency_delta: z.number().optional(),
+  validity_seconds: z.number().optional(),
+  target_group: z.string().optional(),
+  initial_rpm_limit: z.number().optional(),
+  initial_concurrency_limit: z.number().optional(),
   created_time: z.number(),
   redeemed_time: z.number(),
   expired_time: z.number(), // 0 for never expires
@@ -45,11 +55,14 @@ export interface ApiResponse<T = unknown> {
   success: boolean
   message?: string
   data?: T
+  batch_id?: number
 }
 
 export interface GetRedemptionsParams {
   p?: number
   page_size?: number
+  type?: RedemptionType | ''
+  batch_id?: number
   sort_by?: RedemptionSortBy
   sort_order?: SortOrder
 }
@@ -63,6 +76,12 @@ export type RedemptionSortBy =
   | 'expired_time'
   | 'used_user_id'
   | 'redeemed_time'
+
+export type RedemptionType =
+  | 'balance'
+  | 'subscription'
+  | 'rate_limit'
+  | 'registration'
 
 export type SortOrder = 'asc' | 'desc'
 
@@ -80,6 +99,8 @@ export interface GetRedemptionsResponse {
 export interface SearchRedemptionsParams {
   keyword?: string
   status?: string
+  type?: RedemptionType | ''
+  batch_id?: number
   p?: number
   page_size?: number
   sort_by?: RedemptionSortBy
@@ -90,9 +111,40 @@ export interface RedemptionFormData {
   id?: number
   name: string
   quota: number
+  type: RedemptionType
   expired_time: number
   count?: number // Only for create
   status?: number // Only for status update
+  plan_id?: number
+  rpm_delta?: number
+  concurrency_delta?: number
+  validity_seconds?: number
+  target_group?: string
+  initial_rpm_limit?: number | null
+  initial_concurrency_limit?: number | null
+}
+
+export interface RedemptionBatch {
+  id: number
+  name: string
+  type: RedemptionType
+  created_by: number
+  created_at: number
+  expired_time: number
+  count: number
+  quota: number
+  rpm_delta: number
+  concurrency_delta: number
+  validity_seconds: number
+  target_group?: string
+  available_count: number
+  used_count: number
+  disabled_count: number
+  expired_count: number
+}
+
+export interface RedemptionBatchDetail extends RedemptionBatch {
+  redemptions: Redemption[]
 }
 
 // ============================================================================

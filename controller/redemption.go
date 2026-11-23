@@ -1,8 +1,12 @@
 package controller
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
@@ -16,7 +20,9 @@ import (
 func GetAllRedemptions(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewRedemptionSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	redemptions, total, err := model.GetAllRedemptions(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	filters := model.RedemptionFilters{Type: c.Query("type")}
+	filters.BatchID, _ = strconv.Atoi(c.Query("batch_id"))
+	redemptions, total, err := model.GetAllRedemptionsWithFilters(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), filters, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -24,7 +30,6 @@ func GetAllRedemptions(c *gin.Context) {
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(redemptions)
 	common.ApiSuccess(c, pageInfo)
-	return
 }
 
 func SearchRedemptions(c *gin.Context) {
@@ -32,7 +37,9 @@ func SearchRedemptions(c *gin.Context) {
 	status := c.Query("status")
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewRedemptionSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	redemptions, total, err := model.SearchRedemptions(keyword, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	filters := model.RedemptionFilters{Type: c.Query("type")}
+	filters.BatchID, _ = strconv.Atoi(c.Query("batch_id"))
+	redemptions, total, err := model.SearchRedemptionsWithFilters(keyword, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), filters, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -40,7 +47,6 @@ func SearchRedemptions(c *gin.Context) {
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(redemptions)
 	common.ApiSuccess(c, pageInfo)
-	return
 }
 
 func GetRedemption(c *gin.Context) {
@@ -68,66 +74,84 @@ func AddRedemption(c *gin.Context) {
 		return
 	}
 
-	redemption := model.Redemption{}
-	err := c.ShouldBindJSON(&redemption)
+	var request struct {
+		Name                    string `json:"name"`
+		Type                    string `json:"type"`
+		Count                   int    `json:"count"`
+		Quota                   int    `json:"quota"`
+		ExpiredTime             int64  `json:"expired_time"`
+		PlanID                  int    `json:"plan_id"`
+		RPMDelta                int    `json:"rpm_delta"`
+		ConcurrencyDelta        int    `json:"concurrency_delta"`
+		ValiditySeconds         int64  `json:"validity_seconds"`
+		TargetGroup             string `json:"target_group"`
+		InitialRPMLimit         *int   `json:"initial_rpm_limit"`
+		InitialConcurrencyLimit *int   `json:"initial_concurrency_limit"`
+	}
+	err := c.ShouldBindJSON(&request)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if utf8.RuneCountInString(redemption.Name) == 0 || utf8.RuneCountInString(redemption.Name) > 20 {
-		common.ApiErrorT(c, "Redemption code name length must be between 1-20")
+	request.Name = strings.TrimSpace(request.Name)
+	request.Type = strings.TrimSpace(request.Type)
+	if request.Type == "" {
+		request.Type = model.RedemptionTypeBalance
+	}
+	if utf8.RuneCountInString(request.Name) == 0 || utf8.RuneCountInString(request.Name) > 64 {
+		common.ApiErrorT(c, "Redemption batch name length must be between 1-64")
 		return
 	}
-	if redemption.Count <= 0 {
+	if request.Count <= 0 {
 		common.ApiErrorT(c, "Redemption code count must be greater than 0")
 		return
 	}
-	if redemption.Count > 100 {
+	if request.Count > 100 {
 		common.ApiErrorT(c, "Maximum 100 redemption codes can be generated at once")
 		return
 	}
-	if redemption.Quota <= 0 {
-		common.ApiErrorT(c, "Redemption quota must be positive")
-		return
-	}
-	if err := common.ValidateWalletQuota(redemption.Quota); err != nil {
+	if err := validateExpiredTime(request.ExpiredTime); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := validateExpiredTime(redemption.ExpiredTime); err != nil {
-		common.ApiError(c, err)
-		return
-	}
-	var keys []string
-	for i := 0; i < redemption.Count; i++ {
-		key := common.GetUUID()
-		cleanRedemption := model.Redemption{
-			UserId:      c.GetInt("id"),
-			Name:        redemption.Name,
-			Key:         key,
-			CreatedTime: common.GetTimestamp(),
-			Quota:       redemption.Quota,
-			ExpiredTime: redemption.ExpiredTime,
-		}
-		err = cleanRedemption.Insert()
+	planSnapshot := ""
+	if request.Type == model.RedemptionTypeSubscription {
+		plan, err := model.GetSubscriptionPlanById(request.PlanID)
 		if err != nil {
-			common.SysError(common.LogText("failed to insert redemption: %s", err.Error()))
-			common.ApiErrorStatus(c, http.StatusOK, common.NewMessage("Failed to create redemption code, please try again later"), gin.H{"data": keys})
+			common.ApiErrorT(c, "Subscription plan not found")
 			return
 		}
-		keys = append(keys, key)
+		plan.NormalizeDefaults()
+		encoded, err := common.Marshal(plan)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		planSnapshot = string(encoded)
+	}
+	input := model.RedemptionBatchCreate{
+		Name: request.Name, Type: request.Type, CreatedBy: c.GetInt("id"),
+		CreatedAt: common.GetTimestamp(), ExpiredTime: request.ExpiredTime,
+		Count: request.Count, Quota: request.Quota, PlanSnapshot: planSnapshot,
+		RPMDelta: request.RPMDelta, ConcurrencyDelta: request.ConcurrencyDelta,
+		ValiditySeconds: request.ValiditySeconds, TargetGroup: strings.TrimSpace(request.TargetGroup),
+		InitialRPMLimit: request.InitialRPMLimit, InitialConcurrencyLimit: request.InitialConcurrencyLimit,
+	}
+	keys, batchID, err := model.CreateRedemptionBatch(input)
+	if err != nil {
+		common.ApiError(c, err)
+		return
 	}
 	recordManageAudit(c, "redemption.create", map[string]any{
-		"name":  redemption.Name,
-		"count": redemption.Count,
-		"quota": logger.FormatQuota(redemption.Quota),
+		"name": request.Name, "type": request.Type, "count": request.Count,
+		"quota": logger.FormatQuota(request.Quota), "batch_id": batchID,
 	})
 	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "",
-		"data":    keys,
+		"success":  true,
+		"message":  "",
+		"data":     keys,
+		"batch_id": batchID,
 	})
-	return
 }
 
 func DeleteRedemption(c *gin.Context) {
@@ -152,12 +176,29 @@ func UpdateRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
+	if statusOnly != "" {
+		if err := model.UpdateRedemptionStatus(redemption.Id, redemption.Status); err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		updated, err := model.GetRedemptionById(redemption.Id)
+		if err != nil {
+			common.ApiError(c, err)
+			return
+		}
+		common.ApiSuccess(c, updated)
+		return
+	}
 	cleanRedemption, err := model.GetRedemptionById(redemption.Id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if statusOnly == "" {
+	if redemption.Type != "" && redemption.Type != cleanRedemption.Type {
+		common.ApiErrorT(c, "Redemption code type cannot be changed")
+		return
+	}
+	if cleanRedemption.Type == model.RedemptionTypeBalance {
 		if redemption.Quota <= 0 {
 			common.ApiErrorT(c, "Redemption quota must be positive")
 			return
@@ -166,18 +207,17 @@ func UpdateRedemption(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
-		if err := validateExpiredTime(redemption.ExpiredTime); err != nil {
-			common.ApiError(c, err)
-			return
-		}
-		// If you add more fields, please also update redemption.Update()
-		cleanRedemption.Name = redemption.Name
+	}
+	if err := validateExpiredTime(redemption.ExpiredTime); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	// If you add more fields, please also update redemption.Update().
+	cleanRedemption.Name = redemption.Name
+	if cleanRedemption.Type == model.RedemptionTypeBalance {
 		cleanRedemption.Quota = redemption.Quota
-		cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	}
-	if statusOnly != "" {
-		cleanRedemption.Status = redemption.Status
-	}
+	cleanRedemption.ExpiredTime = redemption.ExpiredTime
 	err = cleanRedemption.Update()
 	if err != nil {
 		common.ApiError(c, err)
@@ -230,5 +270,93 @@ func DeleteRedemptionBatch(c *gin.Context) {
 		"total":                    len(request.Ids),
 		"requested_redemption_ids": request.Ids,
 	})
+	common.ApiSuccess(c, count)
+}
+
+func GetRedemptionBatches(c *gin.Context) {
+	pageInfo := common.GetPageQuery(c)
+	batches, total, err := model.GetRedemptionBatches(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), c.Query("type"))
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	pageInfo.SetTotal(int(total))
+	pageInfo.SetItems(batches)
+	common.ApiSuccess(c, pageInfo)
+}
+
+func GetRedemptionBatch(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	detail, err := model.GetRedemptionBatch(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	common.ApiSuccess(c, detail)
+}
+
+func ExportRedemptionBatch(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	codes, err := model.ExportRedemptionBatch(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=redemption-batch-%d.csv", id))
+	if _, err := c.Writer.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		return
+	}
+	csvWriter := csv.NewWriter(c.Writer)
+	if err := csvWriter.Write([]string{"id", "key", "type", "name", "status", "created_time", "expired_time", "redeemed_time", "used_user_id"}); err != nil {
+		return
+	}
+	for _, code := range codes {
+		row := []string{
+			strconv.Itoa(code.Id), safeRedemptionCSVCell(code.Key), safeRedemptionCSVCell(code.Type),
+			safeRedemptionCSVCell(code.Name), strconv.Itoa(code.Status),
+			strconv.FormatInt(code.CreatedTime, 10), strconv.FormatInt(code.ExpiredTime, 10),
+			strconv.FormatInt(code.RedeemedTime, 10), strconv.Itoa(code.UsedUserId),
+		}
+		if err := csvWriter.Write(row); err != nil {
+			return
+		}
+	}
+	csvWriter.Flush()
+}
+
+func safeRedemptionCSVCell(value string) string {
+	formulaCandidate := strings.TrimLeftFunc(value, func(char rune) bool {
+		return unicode.IsSpace(char) || unicode.IsControl(char)
+	})
+	if strings.HasPrefix(formulaCandidate, "=") || strings.HasPrefix(formulaCandidate, "+") ||
+		strings.HasPrefix(formulaCandidate, "-") || strings.HasPrefix(formulaCandidate, "@") ||
+		strings.HasPrefix(formulaCandidate, "＝") || strings.HasPrefix(formulaCandidate, "＋") ||
+		strings.HasPrefix(formulaCandidate, "－") || strings.HasPrefix(formulaCandidate, "＠") {
+		return "\t" + formulaCandidate
+	}
+	return value
+}
+
+func DisableUnusedRedemptionBatch(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		common.ApiErrorT(c, "Invalid parameters")
+		return
+	}
+	count, err := model.DisableUnusedRedemptionBatchCodes(id)
+	if err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	recordManageAudit(c, "redemption.batch_disable_unused", map[string]any{"batch_id": id, "count": count})
 	common.ApiSuccess(c, count)
 }

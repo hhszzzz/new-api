@@ -130,11 +130,11 @@ func TestUserCacheRoundTripsModelBlocklist(t *testing.T) {
 	assert.Equal(t, []string{"gpt-5.5"}, cached.ModelBlocklist)
 }
 
-func TestUserCacheSchemaSevenRoundTripsNullableRateLimits(t *testing.T) {
+func TestUserCacheSchemaNineRoundTripsNullableRateLimits(t *testing.T) {
 	useUserCacheMiniRedis(t)
 	const userID = 4204
 
-	require.Equal(t, 7, userCacheSchemaVersion)
+	require.Equal(t, 9, userCacheSchemaVersion)
 	require.NoError(t, writeUserCache(&UserBase{
 		Id:                userID,
 		Group:             "default",
@@ -170,6 +170,45 @@ func TestUserCacheSchemaSevenRoundTripsNullableRateLimits(t *testing.T) {
 	assert.Nil(t, unlimited.ConcurrencyLimit)
 	assert.Nil(t, unlimited.StreamTpsLimit)
 	assert.Nil(t, unlimited.FirstTokenDelayMs)
+}
+
+func TestUserRateBonusCacheExpiresAtNearestGrantExpiry(t *testing.T) {
+	server := useUserCacheMiniRedis(t)
+	require.NoError(t, DB.AutoMigrate(&Redemption{}))
+	require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	t.Cleanup(func() {
+		require.NoError(t, DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&Redemption{}).Error)
+	})
+
+	now := time.Now().Truncate(time.Second)
+	server.SetTime(now)
+	user := User{
+		Username: "rate-bonus-cache-expiry", Role: common.RoleCommonUser,
+		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, PolicyVersion: 1,
+		RpmLimit: common.GetPointer(60), ConcurrencyLimit: common.GetPointer(2),
+	}
+	require.NoError(t, DB.Create(&user).Error)
+	grant := Redemption{
+		Key: "00000000000000000000000000000051", Type: RedemptionTypeRateLimit,
+		Status: common.RedemptionCodeStatusUsed, UsedUserId: user.Id, RPMDelta: 10,
+		ConcurrencyDelta: 1, RedeemedTime: now.Unix(), ValiditySeconds: 20,
+	}
+	require.NoError(t, DB.Create(&grant).Error)
+	require.NoError(t, populateUserCache(user))
+
+	cached, err := cacheGetUserBase(user.Id)
+	require.NoError(t, err)
+	require.NotNil(t, cached.RpmLimit)
+	assert.Equal(t, 70, *cached.RpmLimit)
+	require.NotNil(t, cached.ConcurrencyLimit)
+	assert.Equal(t, 3, *cached.ConcurrencyLimit)
+	ttl, err := common.RDB.TTL(t.Context(), getUserCacheKey(user.Id)).Result()
+	require.NoError(t, err)
+	assert.LessOrEqual(t, ttl, 20*time.Second)
+	assert.Greater(t, ttl, time.Duration(0))
+
+	server.FastForward(21 * time.Second)
+	assert.False(t, server.Exists(getUserCacheKey(user.Id)))
 }
 
 func TestUserAuthFieldUpdateRejectsVersionMismatch(t *testing.T) {

@@ -30,7 +30,11 @@ import {
 } from '@/components/ui/tooltip'
 import { formatQuota, formatTimestampToDate } from '@/lib/format'
 
-import { REDEMPTION_FILTER_EXPIRED, REDEMPTION_STATUSES } from '../constants'
+import {
+  REDEMPTION_FILTER_EXPIRED,
+  REDEMPTION_STATUSES,
+  REDEMPTION_TYPES,
+} from '../constants'
 import { isRedemptionExpired, isTimestampExpired } from '../lib'
 import type { Redemption } from '../types'
 import { DataTableRowActions } from './data-table-row-actions'
@@ -133,6 +137,16 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
       size: 120,
     },
     {
+      accessorKey: 'type',
+      header: t('Code type'),
+      cell: ({ row }) => {
+        const type = row.original.type ?? 'balance'
+        const label = REDEMPTION_TYPES.find((option) => option.value === type)
+        return <span>{label ? t(label.labelKey) : type}</span>
+      },
+      size: 160,
+    },
+    {
       id: 'code',
       accessorKey: 'key',
       header: t('Redemption Code'),
@@ -159,6 +173,9 @@ export function useRedemptionsColumns(): ColumnDef<Redemption>[] {
       header: t('Quota'),
       cell: ({ row }) => {
         const quota = row.getValue('quota') as number
+        if ((row.original.type ?? 'balance') !== 'balance') {
+          return <span className='text-muted-foreground'>-</span>
+        }
         return (
           <StatusBadge
             label={formatQuota(quota)}

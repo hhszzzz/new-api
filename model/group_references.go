@@ -19,6 +19,9 @@ func renameGroupReferencesWithTx(tx *gorm.DB, oldName, newName string, affectedU
 	if err := rewriteGroupOptionsWithTx(tx, oldName, newName, false); err != nil {
 		return err
 	}
+	if err := renameRedemptionPlanSnapshotGroupReferencesWithTx(tx, oldName, newName); err != nil {
+		return err
+	}
 	if err := mergeUserGroupMembershipsWithTx(tx, oldName, newName); err != nil {
 		return err
 	}
@@ -50,6 +53,8 @@ func renameGroupReferencesWithTx(tx *gorm.DB, oldName, newName string, affectedU
 		field string
 	}{
 		{&UserModelRoute{}, "execution_group"},
+		{&Redemption{}, "target_group"},
+		{&RedemptionBatch{}, "target_group"},
 		{&SubscriptionPlan{}, "upgrade_group"},
 		{&SubscriptionPlan{}, "downgrade_group"},
 		{&UserSubscription{}, "upgrade_group"},

@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/group_rate_limit_setting"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -62,6 +63,19 @@ func WeChatAuth(c *gin.Context) {
 		return
 	}
 	code := c.Query("code")
+	registrationCode := ""
+	if c.Request.Method == http.MethodPost {
+		var request struct {
+			Code             string `json:"code"`
+			RegistrationCode string `json:"registration_code"`
+		}
+		if err := common.DecodeJson(c.Request.Body, &request); err != nil {
+			common.ApiErrorT(c, "Invalid parameters")
+			return
+		}
+		code = request.Code
+		registrationCode = strings.TrimSpace(request.RegistrationCode)
+	}
 	wechatId, err := getWeChatIdByCode(code)
 	if err != nil {
 		common.ApiError(c, err)
@@ -82,12 +96,25 @@ func WeChatAuth(c *gin.Context) {
 		}
 	} else {
 		if common.RegisterEnabled {
+			registrationCodesRequired := false
+			if rateLimitSettings := group_rate_limit_setting.GetSettingSnapshot(); rateLimitSettings != nil {
+				registrationCodesRequired = rateLimitSettings.RegistrationCodeRequired
+			}
+			if registrationCodesRequired && (registrationCode == "" || len(registrationCode) > maxRegistrationCodeLength) {
+				common.ApiErrorI18n(c, i18n.MsgUserRegisterFailed)
+				return
+			}
 			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
 			user.DisplayName = "WeChat User"
 			user.Role = common.RoleCommonUser
 			user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(0); err != nil {
+			if registrationCodesRequired {
+				err = user.InsertWithRegistrationCode(model.RedemptionCodeDigest(registrationCode), 0)
+			} else {
+				err = user.Insert(0)
+			}
+			if err != nil {
 				common.SysError("failed to register WeChat user: " + err.Error())
 				common.ApiErrorI18n(c, i18n.MsgUserRegisterFailed)
 				return

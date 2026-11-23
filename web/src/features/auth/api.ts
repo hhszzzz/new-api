@@ -172,23 +172,29 @@ export async function githubOAuthStart(clientId: string, state: string) {
 // Get OAuth state for CSRF protection
 export async function createOAuthAuthorization(
   provider: string,
-  intent: 'login' | 'bind' | 'verify',
+  intent: 'login' | 'register' | 'bind' | 'verify',
   operation?: VerificationOperation,
   signal?: AbortSignal,
-  proofToken?: string
+  proofToken?: string,
+  registrationCode?: string
 ): Promise<{ state: string; authorizationUrl?: string }> {
-  const aff = intent === 'login' ? getAffiliateCode() : ''
+  const aff =
+    intent === 'login' || intent === 'register' ? getAffiliateCode() : ''
   const res = await api.post(
     '/api/oauth/state',
     {
       provider,
       intent,
       aff: aff || undefined,
+      registration_code:
+        intent === 'register'
+          ? registrationCode?.trim() || undefined
+          : undefined,
       scope: operation?.scope,
       ...(operation?.context ? { context: operation.context } : {}),
     },
     {
-      skipAuthRefresh: intent === 'login',
+      skipAuthRefresh: intent === 'login' || intent === 'register',
       ...(proofToken ? { headers: { 'X-Security-Proof': proofToken } } : {}),
       singleUseAuthorization: intent === 'bind',
       signal,
@@ -215,16 +221,36 @@ export async function createOAuthAuthorization(
 
 export async function createOAuthFlow(
   provider: string,
-  intent: 'login' | 'bind' | 'verify',
+  intent: 'login' | 'register' | 'bind' | 'verify',
   operation?: VerificationOperation,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  registrationCode?: string
 ): Promise<string> {
-  return (await createOAuthAuthorization(provider, intent, operation, signal))
-    .state
+  return (
+    await createOAuthAuthorization(
+      provider,
+      intent,
+      operation,
+      signal,
+      undefined,
+      registrationCode
+    )
+  ).state
 }
 
 // WeChat login by authorization code
-export async function wechatLoginByCode(code: string): Promise<ApiResponse> {
+export async function wechatLoginByCode(
+  code: string,
+  registrationCode?: string,
+  registrationMode = false
+): Promise<ApiResponse> {
+  if (registrationMode) {
+    const res = await api.post('/api/oauth/wechat', {
+      code,
+      registration_code: registrationCode?.trim() || undefined,
+    })
+    return res.data
+  }
   const res = await api.get('/api/oauth/wechat', { params: { code } })
   return res.data
 }

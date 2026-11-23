@@ -62,7 +62,9 @@ func TestAuthCacheIntegrityDatabaseMatrix(t *testing.T) {
 			useUserCacheMiniRedis(t)
 
 			user := User{Username: "cache-integrity-user", AffCode: "cache-int", Role: common.RoleCommonUser,
-				Status: common.UserStatusEnabled, AuthVersion: 1, Group: "default", Quota: 100}
+				Status: common.UserStatusEnabled, AuthVersion: 1, Group: "default", Quota: 100,
+				RpmLimit: common.GetPointer(60), ConcurrencyLimit: common.GetPointer(2),
+				StreamTpsLimit: common.GetPointer(12), FirstTokenDelayMs: common.GetPointer(1500)}
 			require.NoError(t, DB.Create(&user).Error)
 			t.Cleanup(func() { assert.NoError(t, db.Unscoped().Delete(&user).Error) })
 			require.NoError(t, populateUserCache(user))
@@ -100,6 +102,38 @@ func TestAuthCacheIntegrityDatabaseMatrix(t *testing.T) {
 				assert.Equal(t, common.RoleCommonUser, cached.Role)
 				assert.Equal(t, "paid", cached.Group)
 				assert.Equal(t, 30, cached.Quota)
+			})
+
+			t.Run("user_rate_limits_are_signed", func(t *testing.T) {
+				for _, field := range []struct {
+					name  string
+					value string
+				}{
+					{name: "RpmLimit", value: "600"},
+					{name: "ConcurrencyLimit", value: "20"},
+					{name: "StreamTpsLimit", value: "120"},
+					{name: "FirstTokenDelayMs", value: "1"},
+				} {
+					require.NoError(t, common.RDB.HSet(t.Context(), getUserCacheKey(user.Id), field.name, field.value).Err())
+					_, err := cacheGetUserBase(user.Id)
+					require.Error(t, err, "tampering with %s must invalidate the cache", field.name)
+
+					loaded, err := GetUserCache(user.Id)
+					require.NoError(t, err)
+					require.NotNil(t, loaded.RpmLimit)
+					require.NotNil(t, loaded.ConcurrencyLimit)
+					require.NotNil(t, loaded.StreamTpsLimit)
+					require.NotNil(t, loaded.FirstTokenDelayMs)
+					assert.Equal(t, 60, *loaded.RpmLimit)
+					assert.Equal(t, 2, *loaded.ConcurrencyLimit)
+					assert.Equal(t, 12, *loaded.StreamTpsLimit)
+					assert.Equal(t, 1500, *loaded.FirstTokenDelayMs)
+
+					cached, err := cacheGetUserBase(user.Id)
+					require.NoError(t, err)
+					require.NotNil(t, cached.RpmLimit)
+					assert.Equal(t, 60, *cached.RpmLimit)
+				}
 			})
 
 			allowIPs := "192.168.0.0/16"

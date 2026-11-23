@@ -89,10 +89,24 @@ export function getRedemptionStatusOptions(t: TFunction) {
 
 export const REDEMPTION_VALIDATION = {
   NAME_MIN_LENGTH: 1,
-  NAME_MAX_LENGTH: 20,
+  NAME_MAX_LENGTH: 64,
   COUNT_MIN: 1,
   COUNT_MAX: 100,
 } as const
+
+export const REDEMPTION_TYPES = [
+  { value: 'balance', labelKey: 'Balance code' },
+  { value: 'subscription', labelKey: 'Subscription code' },
+  { value: 'rate_limit', labelKey: 'Temporary rate-limit code' },
+  { value: 'registration', labelKey: 'Registration code' },
+] as const
+
+export const REDEMPTION_TYPE_VALUES = [
+  'balance',
+  'subscription',
+  'rate_limit',
+  'registration',
+] as const
 
 // ============================================================================
 // Error Messages
