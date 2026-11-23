@@ -32,6 +32,8 @@ import {
   sideDrawerHeaderClassName,
 } from '@/components/drawer-layout'
 import { MultiSelect } from '@/components/multi-select'
+import { PasswordInput } from '@/components/password-input'
+import { PasswordStrength } from '@/components/password-strength'
 import { PermissionMatrix } from '@/components/permission-matrix'
 import { Button } from '@/components/ui/button'
 import {
@@ -125,7 +127,8 @@ export function UsersMutateDrawer({
   const currentUser = useAuthStore((s) => s.auth.user)
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [quotaDialogOpen, setQuotaDialogOpen] = useState(false)
-  const loadedPermissions = useRef<UserFormValues['admin_permissions']>(undefined)
+  const loadedPermissions =
+    useRef<UserFormValues['admin_permissions']>(undefined)
   const submitScope = open ? (currentRowId ?? 'create') : null
   const { begin: beginSubmitTask, invalidate: invalidateSubmitTask } =
     useLatestAsyncTask(submitScope)
@@ -241,14 +244,16 @@ export function UsersMutateDrawer({
   }, [groupsData?.data, selectedGroups])
   const modelOptions = useMemo(() => {
     const values = new Set([
-      ...(pricingData?.data || []).map((model) => model.model_name),
+      ...(Array.isArray(pricingData?.data) ? pricingData.data : []).map(
+        (model) => model.model_name
+      ),
       ...selectedModelLimits,
       ...selectedModelBlocklist,
     ])
     return [...values]
       .sort((left, right) => left.localeCompare(right))
       .map((model) => ({ value: model, label: model }))
-  }, [pricingData?.data, selectedModelLimits, selectedModelBlocklist])
+  }, [pricingData, selectedModelLimits, selectedModelBlocklist])
   const canEditAdminPermissions = currentUser?.role === ROLE.SUPER_ADMIN
   const targetIsAdmin = (selectedRole ?? currentRow?.role ?? 0) >= ROLE.ADMIN
 
@@ -291,7 +296,12 @@ export function UsersMutateDrawer({
         isUpdate &&
         payload.admin_permissions &&
         JSON.stringify(payload.admin_permissions) ===
-          JSON.stringify(normalizeAdminPermissions(loadedPermissions.current, permissionCatalog))
+          JSON.stringify(
+            normalizeAdminPermissions(
+              loadedPermissions.current,
+              permissionCatalog
+            )
+          )
       ) {
         delete payload.admin_permissions
       }
@@ -302,7 +312,10 @@ export function UsersMutateDrawer({
             scope: 'admin.user.update',
             context: { user_id: currentRow.id },
             title: t('Verify to update user credentials'),
-            description: t('Confirm your identity before changing the account {{username}}.', { username: currentRow.username }),
+            description: t(
+              'Confirm your identity before changing the account {{username}}.',
+              { username: currentRow.username }
+            ),
           })
           if (!proof || !isCurrent()) return
           proofToken = proof.proof_token
@@ -312,7 +325,9 @@ export function UsersMutateDrawer({
           scope: 'admin.user.create',
           context: { role: payload.role ?? ROLE.ADMIN },
           title: t('Verify to create administrator'),
-          description: t('Confirm your identity before creating an administrator account.'),
+          description: t(
+            'Confirm your identity before creating an administrator account.'
+          ),
         })
         if (!proof || !isCurrent()) return
         proofToken = proof.proof_token
@@ -479,10 +494,17 @@ export function UsersMutateDrawer({
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>{t('Password')}</FormLabel>
-                      <FormControl>
-                        <Input
+                      <FormControl
+                        describedBy={
+                          !isUpdate || field.value
+                            ? 'user-password-strength'
+                            : undefined
+                        }
+                      >
+                        <PasswordInput
                           {...field}
-                          type='password'
+                          value={field.value ?? ''}
+                          autoComplete='new-password'
                           placeholder={
                             isUpdate
                               ? t('Leave empty to keep unchanged')
@@ -490,6 +512,11 @@ export function UsersMutateDrawer({
                           }
                         />
                       </FormControl>
+                      <PasswordStrength
+                        id='user-password-strength'
+                        value={field.value ?? ''}
+                        quietWhenEmpty={isUpdate}
+                      />
                       <FormMessage />
                     </FormItem>
                   )}

@@ -134,7 +134,7 @@ func TestModelRadarManagementDatabaseMatrix(t *testing.T) {
 			assert.Equal(t, http.StatusConflict, response.Code)
 			assert.Contains(t, response.Body.String(), task.Data.TaskID)
 			var count int64
-			require.NoError(t, db.Model(&model.SystemTask{}).Count(&count).Error)
+			require.NoError(t, db.Model(&model.SystemTask{}).Where("type = ?", model.SystemTaskTypeModelRadarSync).Count(&count).Error)
 			assert.EqualValues(t, 1, count)
 
 			modelManagementRequest(t, GetModelRadarManagement, "GET", "/api/model-radar/manage", nil, &management)

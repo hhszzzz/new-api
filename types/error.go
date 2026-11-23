@@ -6,6 +6,7 @@ import (
 	"fmt"
 	kittypes "github.com/QuantumNous/new-api/relaykit/types"
 	"net/http"
+	"slices"
 	"strings"
 
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
@@ -31,6 +32,9 @@ type ErrorCode string
 const (
 	ErrorCodeInvalidRequest         ErrorCode = "invalid_request"
 	ErrorCodeSensitiveWordsDetected ErrorCode = "sensitive_words_detected"
+	ErrorCodeRequestRejected        ErrorCode = "request_rejected"
+	ErrorCodeRequestPluginFailed    ErrorCode = "request_plugin_failed"
+	ErrorCodeResponseRejected       ErrorCode = "response_rejected"
 	ErrorCodePromptBlocked          ErrorCode = "prompt_blocked"
 	ErrorCodeViolationFeeGrokCSAM   ErrorCode = "violation_fee.grok.csam"
 	ErrorCodeSiteClosed             ErrorCode = "site_closed"
@@ -298,7 +302,8 @@ func (e *NewAPIError) SetMessage(message string) {
 	}
 }
 
-func (e *NewAPIError) ToOpenAIError() OpenAIError {
+func (e *NewAPIError) ToOpenAIError(upstreamURLs ...string) OpenAIError {
+	upstreamURLs = append(slices.Clone(e.upstreamURLs), upstreamURLs...)
 	var result OpenAIError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
@@ -338,7 +343,7 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message, e.upstreamURLs...)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)
@@ -346,7 +351,8 @@ func (e *NewAPIError) ToOpenAIError() OpenAIError {
 	return result
 }
 
-func (e *NewAPIError) ToClaudeError() ClaudeError {
+func (e *NewAPIError) ToClaudeError(upstreamURLs ...string) ClaudeError {
+	upstreamURLs = append(slices.Clone(e.upstreamURLs), upstreamURLs...)
 	var result ClaudeError
 	switch e.errorType {
 	case ErrorTypeOpenAIError:
@@ -370,7 +376,7 @@ func (e *NewAPIError) ToClaudeError() ClaudeError {
 		result.Message = e.Error()
 	}
 	if e.errorCode != ErrorCodeCountTokenFailed {
-		result.Message = kitutil.MaskSensitiveInfo(result.Message, e.upstreamURLs...)
+		result.Message = kitutil.MaskSensitiveInfo(result.Message, upstreamURLs...)
 	}
 	if result.Message == "" {
 		result.Message = string(e.errorType)

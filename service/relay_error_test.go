@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/QuantumNous/new-api/types"
 
@@ -276,4 +277,16 @@ func TestRequestPolicyEventsReachLogAdminInfo(t *testing.T) {
 	other := model.NewLogOther()
 	AppendRelayLogAdminInfo(untouched, nil, other)
 	assert.NotContains(t, other.Snapshot()["admin_info"], "request_policy", "requests without decisions do not carry an empty record")
+}
+
+func TestAppendRelayLogAdminInfoWithoutChannelMetadata(t *testing.T) {
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	other := model.NewLogOther()
+
+	require.NotPanics(t, func() {
+		AppendRelayLogAdminInfo(c, &relaycommon.RelayInfo{}, other)
+	})
+	adminInfo, ok := other.Snapshot()["admin_info"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, true, adminInfo["model_routing_checked"])
 }

@@ -450,14 +450,14 @@ const ModelRatioVisualEditorComponent = forwardRef<
           requestRuleExpr: editableModel.requestRuleExpr,
         },
       })
-	      setPanelDirty(false)
+      setPanelDirty(false)
     },
     [isMobile]
   )
 
   const closeEditor = useCallback(() => {
-	  setEditorState({ editData: null, editorOpen: false, sheetOpen: false })
-	  setPanelDirty(false)
+    setEditorState({ editData: null, editorOpen: false, sheetOpen: false })
+    setPanelDirty(false)
   }, [])
 
   // The panel does not report when it closes, so only an open one counts.
@@ -468,7 +468,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
 
   const handleAdd = useCallback(() => {
     setEditorState({ editData: null, editorOpen: true, sheetOpen: isMobile })
-	  setPanelDirty(false)
+    setPanelDirty(false)
   }, [isMobile])
 
   const handleGlobalFilterChange = useCallback<OnChangeFn<string>>(
@@ -481,7 +481,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
             editorOpen: false,
             sheetOpen: false,
           })
-	          setPanelDirty(false)
+          setPanelDirty(false)
         }
         return next
       })
@@ -627,16 +627,22 @@ const ModelRatioVisualEditorComponent = forwardRef<
         }
         onChange(key, JSON.stringify(draft, null, 2))
       }
+      // The callback executes from the table's row action, outside render.
+      // oxlint-disable-next-line react/refs
       if (editingModelNameRef.current !== name) return
       const saved = pricingRows(savedOptions).find((row) => row.name === name)
       if (saved) handleEdit(buildModelRow(name, saved, saved))
       else closeEditor()
     },
-	    [draftOptions, savedOptions, onChange, handleEdit, closeEditor]
+    [draftOptions, savedOptions, onChange, handleEdit, closeEditor]
   )
 
+  // This callback reads the ref only when a user activates the row action.
+  // Keep the stable column memo so opening the editor preserves table state.
+  // oxlint-disable-next-line react/refs
   const columns = useMemo(
     () =>
+      // oxlint-disable-next-line react/refs
       buildModelRatioColumns({
         onDelete: handleDelete,
         onRestore: handleRestore,

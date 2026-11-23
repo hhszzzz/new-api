@@ -59,7 +59,11 @@ function channel(name: string): Channel {
     balance_updated_time: 0,
     models: 'gpt-4o',
     group: 'vip',
-    schedule: { timezone: 'Asia/Shanghai', weekly_enabled: false, weekly_windows: {} },
+    schedule: {
+      timezone: 'Asia/Shanghai',
+      weekly_enabled: false,
+      weekly_windows: {},
+    },
     inherit_aggregate_base_url: false,
     used_quota: 0,
     other_info: '',

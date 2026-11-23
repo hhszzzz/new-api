@@ -160,7 +160,6 @@ export function ModelMutateDrawer(props: {
   useEffect(() => {
     if (!props.open) {
       form.reset(MODEL_FORM_DEFAULT_VALUES)
-      setCreatedModel(null)
       loadedKey.current = ''
       return
     }

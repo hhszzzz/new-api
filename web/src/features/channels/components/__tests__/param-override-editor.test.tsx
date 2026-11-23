@@ -64,7 +64,9 @@ async function renderPruneRules(
   )
   // Wait for the dialog's opening autofocus before testing user-driven focus.
   await waitFor(() =>
-    expect(screen.getByRole('dialog')).toContainElement(document.activeElement as HTMLElement)
+    expect(screen.getByRole('dialog')).toContainElement(
+      document.activeElement as HTMLElement
+    )
   )
   return onSave
 }

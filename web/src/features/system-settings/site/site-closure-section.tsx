@@ -17,8 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
-import type { Resolver } from 'react-hook-form'
 import { useState } from 'react'
+import type { Resolver } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import * as z from 'zod'
 
@@ -36,10 +36,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
-import {
-  formatTimestampForInput,
-  parseTimestampFromInput,
-} from '@/lib/format'
+import { formatTimestampForInput, parseTimestampFromInput } from '@/lib/format'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
@@ -95,9 +92,7 @@ type SiteClosureSectionProps = {
   defaultValues: SiteClosureFormValues
 }
 
-export function SiteClosureSection({
-  defaultValues,
-}: SiteClosureSectionProps) {
+export function SiteClosureSection({ defaultValues }: SiteClosureSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
   const [pendingSwitch, setPendingSwitch] = useState<ClosureSwitchKey | null>(
@@ -109,16 +104,17 @@ export function SiteClosureSection({
       web_closed: z.boolean(),
       api_paused: z.boolean(),
       title: z.string().max(200, {
-        error: () =>
-          t('Maintenance title must be at most 200 characters'),
+        error: () => t('Maintenance title must be at most 200 characters'),
       }),
       message: z.string().max(8192, {
-        error: () =>
-          t('Maintenance message must be at most 8192 characters'),
+        error: () => t('Maintenance message must be at most 8192 characters'),
       }),
-      expected_recovery_at: z.number().int().min(0, {
-        error: () => t('Expected recovery time must not be negative'),
-      }),
+      expected_recovery_at: z
+        .number()
+        .int()
+        .min(0, {
+          error: () => t('Expected recovery time must not be negative'),
+        }),
     }),
   })
 
@@ -281,9 +277,7 @@ export function SiteClosureSection({
                     />
                   </FormControl>
                   <FormDescription>
-                    {t(
-                      'Leave empty to use the built-in localized title.'
-                    )}
+                    {t('Leave empty to use the built-in localized title.')}
                   </FormDescription>
                   <FormMessage />
                 </FormItem>
@@ -364,9 +358,7 @@ export function SiteClosureSection({
           if (!open) setPendingSwitch(null)
         }}
         title={
-          pendingIsWeb
-            ? t('Close the website?')
-            : t('Pause the API service?')
+          pendingIsWeb ? t('Close the website?') : t('Pause the API service?')
         }
         desc={
           pendingIsWeb

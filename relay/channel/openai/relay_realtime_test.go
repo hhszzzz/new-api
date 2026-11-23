@@ -73,20 +73,22 @@ func TestPreConsumeUsageReservesCumulativeQuotaWithoutSettling(t *testing.T) {
 	}
 	total := &dto.RealtimeUsage{}
 
-	require.NoError(t, preConsumeUsage(ctx, info, &dto.RealtimeUsage{
+	_, err := preConsumeUsage(ctx, info, &dto.RealtimeUsage{
 		TotalTokens: 10,
 		InputTokens: 10,
 		InputTokenDetails: dto.InputTokenDetails{
 			TextTokens: 10,
 		},
-	}, total))
-	require.NoError(t, preConsumeUsage(ctx, info, &dto.RealtimeUsage{
+	}, total)
+	require.NoError(t, err)
+	_, err = preConsumeUsage(ctx, info, &dto.RealtimeUsage{
 		TotalTokens:  5,
 		OutputTokens: 5,
 		OutputTokenDetails: dto.OutputTokenDetails{
 			TextTokens: 5,
 		},
-	}, total))
+	}, total)
+	require.NoError(t, err)
 
 	assert.Equal(t, []int{10, 20}, recorder.reserves)
 	assert.Empty(t, recorder.settles)
@@ -116,10 +118,12 @@ func TestPreConsumeUsageCommitsTotalOnlyAfterReserveSucceeds(t *testing.T) {
 		},
 	}
 
-	require.EqualError(t, preConsumeUsage(ctx, info, batch, total), "reserve failed")
+	_, err := preConsumeUsage(ctx, info, batch, total)
+	require.EqualError(t, err, "reserve failed")
 	assert.Equal(t, dto.RealtimeUsage{}, *total)
 
-	require.NoError(t, preConsumeUsage(ctx, info, batch, total))
+	_, err = preConsumeUsage(ctx, info, batch, total)
+	require.NoError(t, err)
 	assert.Equal(t, []int{10, 10}, recorder.reserves)
 	assert.Equal(t, 10, total.TotalTokens)
 	assert.Equal(t, 10, total.InputTokens)

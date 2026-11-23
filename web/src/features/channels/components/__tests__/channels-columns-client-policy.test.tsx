@@ -1,3 +1,4 @@
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   flexRender,
   getCoreRowModel,
@@ -59,15 +60,21 @@ function ChannelNameCell(props: { channel: Channel }) {
   ) : null
 }
 
+function renderChannelName(channel: Channel) {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <ChannelNameCell channel={channel} />
+    </QueryClientProvider>
+  )
+}
+
 describe('channel client policy marker', () => {
   test('marks concrete channel rows with their configured policy', () => {
-    render(
-      <ChannelNameCell
-        channel={channelWithClientPolicy({
-          mode: 'deny',
-          clients: ['claude_code'],
-        })}
-      />
+    renderChannelName(
+      channelWithClientPolicy({ mode: 'deny', clients: ['claude_code'] })
     )
 
     expect(screen.getByTestId('client-policy-indicator')).toHaveAttribute(
@@ -77,7 +84,7 @@ describe('channel client policy marker', () => {
   })
 
   test('leaves unrestricted channels without a marker', () => {
-    render(<ChannelNameCell channel={channelWithClientPolicy()} />)
+    renderChannelName(channelWithClientPolicy())
 
     expect(screen.queryByTestId('client-policy-indicator')).toBeNull()
   })
@@ -96,7 +103,7 @@ describe('channel client policy marker', () => {
       row_kind: 'channel_aggregate',
     } as unknown as Channel
 
-    render(<ChannelNameCell channel={aggregate} />)
+    renderChannelName(aggregate)
 
     expect(screen.queryByTestId('client-policy-indicator')).toBeNull()
   })

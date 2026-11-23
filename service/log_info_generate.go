@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/base64"
+	"slices"
 	"strings"
 	"time"
 
@@ -117,6 +118,9 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 		if relayInfo.ConversionDiagnosticsTruncated() {
 			other.SetAdmin("conversion_diagnostics_truncated", true)
 		}
+		if len(relayInfo.RequestPluginSteps) > 0 {
+			other.SetAdmin("request_plugins", relayInfo.RequestPluginSteps)
+		}
 	}
 	if common.GetContextKeyBool(ctx, constant.ContextKeyChannelIsMultiKey) {
 		other.SetAdmin("is_multi_key", true)
@@ -129,7 +133,7 @@ func AppendRelayLogAdminInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo,
 	AppendChannelAffinityAdminInfo(ctx, other)
 	AppendPromptAuditAdminInfo(ctx, other)
 	if relayInfo != nil {
-		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.UpstreamModelName)
+		AppendModelRoutingAdminInfo(other, relayInfo.HasModelRouting(), relayInfo.GetUpstreamModelName())
 		AppendDifyWorkflowAdminInfo(relayInfo, other)
 		AppendParamOverrideAdminInfo(relayInfo, other)
 		if relayInfo.RouteSystemPrompt() != "" {
@@ -192,6 +196,7 @@ func GenerateTextOtherInfo(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, m
 	appendFinalRequestFormat(relayInfo, other)
 	appendBillingInfo(relayInfo, other)
 	AppendParamOverrideAdminInfo(relayInfo, other)
+	appendRequestPluginRecord(relayInfo, other)
 	appendStreamStatus(relayInfo, other)
 	AppendUserRateLimitAdminInfo(ctx, other)
 	AppendChannelRateLimitAdminInfo(ctx, other)
@@ -210,6 +215,16 @@ func AppendParamOverrideAdminInfo(relayInfo *relaycommon.RelayInfo, other *model
 		return
 	}
 	other.SetAdmin("po", relayInfo.ParamOverrideAudit)
+}
+
+// appendRequestPluginRecord shows users what the request plugins changed in
+// their request. A retry rewrites the attempt's entries in place, so the
+// log keeps a copy.
+func appendRequestPluginRecord(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
+	if relayInfo == nil || other == nil || len(relayInfo.RequestPluginRecord) == 0 {
+		return
+	}
+	other.SetPublic("request_plugins", relaycommon.CapRequestPluginRecord(slices.Clone(relayInfo.RequestPluginRecord)))
 }
 
 func appendStreamStatus(relayInfo *relaycommon.RelayInfo, other *model.LogOther) {
@@ -372,6 +387,7 @@ func GenerateMjOtherInfo(relayInfo *relaycommon.RelayInfo, priceData hosttypes.P
 		other.SetPublic("user_group_ratio", priceData.GroupRatioInfo.GroupSpecialRatio)
 	}
 	appendRequestPath(nil, relayInfo, other)
+	appendRequestPluginRecord(relayInfo, other)
 	return other
 }
 

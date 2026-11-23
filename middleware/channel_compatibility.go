@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/model"
+	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/service/channelcompat"
 	"github.com/QuantumNous/new-api/service/clientpolicy"
@@ -60,6 +61,9 @@ func BuildChannelCandidateFilter(c *gin.Context, modelName string) model.Channel
 		if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
 			return true
 		}
+		if providerPluginChannelServesRequest(channel, requestPath, modelName) {
+			return true
+		}
 		if bridgeClassifierOwnsProtocolFiltering {
 			return true
 		}
@@ -80,6 +84,9 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 	modelName = strings.TrimSpace(modelName)
 	return func(channel *model.Channel) model.ChannelCandidateClass {
 		if _, matched := pinnedEndpointCandidateForChannel(c, channel, c.GetString("expected_task_plugin_key")); matched {
+			return model.ChannelCandidateNative
+		}
+		if providerPluginChannelServesRequest(channel, requestPath, modelName) {
 			return model.ChannelCandidateNative
 		}
 		plans := channelcompat.PlansForRequest(channel, protocol, modelName, requestPath, features)
@@ -118,6 +125,22 @@ func BuildChannelCandidateClassifier(c *gin.Context, modelName string) model.Cha
 			return model.ChannelCandidateIncompatible
 		}
 	}
+}
+
+// providerPluginChannelServesRequest reports a task plugin channel whose
+// provider plugin declares the exact client endpoint and model. Such a route
+// owns protocol compatibility itself, like an advanced custom route.
+func providerPluginChannelServesRequest(channel *model.Channel, requestPath, modelName string) bool {
+	if channel == nil || channel.Type != constant.ChannelTypeTaskPlugin {
+		return false
+	}
+	generation := jsplugin.DefaultRegistry.Generation()
+	plugin, ok := generation.Get(channel.GetSetting().TaskPluginKey)
+	if !ok || !plugin.Meta.HasProviderPart() {
+		return false
+	}
+	_, ok = plugin.Meta.RelayRoute(requestPath, modelName)
+	return ok
 }
 
 func requestProtocolFeatures(c *gin.Context, protocol channelcompat.Protocol) channelcompat.RequestFeatureSet {
@@ -175,6 +198,11 @@ func applySelectedChannelCompatibility(c *gin.Context, channel *model.Channel, m
 	}
 	protocol := channelcompat.DetectRequestProtocol(c.Request.URL.Path)
 	if protocol == "" {
+		return nil
+	}
+	if providerPluginChannelServesRequest(channel, c.Request.URL.Path, modelName) {
+		common.SetContextKey(c, constant.ContextKeyProtocolAutoAttempt, nil)
+		common.SetContextKey(c, constant.ContextKeyProtocolPlan, nil)
 		return nil
 	}
 	plans := channelcompat.PlansForRequest(channel, protocol, modelName, c.Request.URL.Path, requestProtocolFeatures(c, protocol))

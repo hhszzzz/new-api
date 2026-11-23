@@ -26,8 +26,8 @@ import type {
   ResolvedSidebarView,
   SidebarBadges,
 } from '@/components/layout/types'
-import { hasPermission } from '@/lib/admin-permissions'
 import { useModelPricingIssueBadge } from '@/features/system-settings/models/pricing-issues'
+import { hasPermission } from '@/lib/admin-permissions'
 import { ROLE } from '@/lib/roles'
 import { useAuthStore } from '@/stores/auth-store'
 

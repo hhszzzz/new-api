@@ -12,6 +12,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/model_setting"
@@ -161,12 +162,18 @@ func GeminiEmbeddingHandler(c *gin.Context, info *relaycommon.RelayInfo) (newAPI
 		return hosttypes.NewError(err, hosttypes.ErrorCodeConvertRequestFailed, hosttypes.ErrOptionWithSkipRetry())
 	}
 
+	if jsonData, newAPIError = requestplugin.Outbound(c, info, jsonData); newAPIError != nil {
+		return newAPIError
+	}
 	// apply param override
 	if len(info.ParamOverride) > 0 {
 		jsonData, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonData, info)
 		if err != nil {
 			return newAPIErrorFromParamOverride(err)
 		}
+	}
+	if newAPIError = requestplugin.Egress(c, info, jsonData); newAPIError != nil {
+		return newAPIError
 	}
 	logger.LogDebug(c, "Gemini embedding request body: %s", jsonData)
 	body, closer, err := relaycommon.NewOutboundJSONBody(jsonData)

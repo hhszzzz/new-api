@@ -80,6 +80,7 @@ import { DetailsDialog } from '../dialogs/details-dialog'
 import { LogCostDisplay } from '../log-cost-display'
 import { ModelBadge } from '../model-badge'
 import { ProtocolTranslationBadge } from '../protocol-translation-badge'
+import { RequestPluginLogMarker } from '../request-plugin-record'
 import { TimingMetricsCell, StreamTpsCell } from '../timing-metrics-cell'
 import { useUsageLogsContext } from '../usage-logs-provider'
 
@@ -365,6 +366,7 @@ export function useCommonLogsColumns(
 ): ColumnDef<UsageLog>[] {
   const { t } = useTranslation()
   const currency = useSystemConfigStore((state) => state.config.currency)
+  const [openDetailsLogId, setOpenDetailsLogId] = useState<number | null>(null)
   return useMemo(() => {
     const columns: ColumnDef<UsageLog>[] = [
       {
@@ -812,6 +814,7 @@ export function useCommonLogsColumns(
             other,
             canViewModelRoute
           )
+          const requestPlugins = other?.request_plugins
           return (
             <div className='flex w-fit flex-col items-start gap-0.5'>
               <ModelBadge
@@ -824,6 +827,9 @@ export function useCommonLogsColumns(
                 other={other}
                 isAdminView={isAdminView}
               />
+              {requestPlugins?.length ? (
+                <RequestPluginLogMarker items={requestPlugins} />
+              ) : null}
             </div>
           )
         },
@@ -956,86 +962,19 @@ export function useCommonLogsColumns(
       {
         accessorKey: 'content',
         header: t('Details'),
-        cell: function DetailsCell({ row }) {
-          const { t, i18n } = useTranslation()
-          const [dialogOpen, setDialogOpen] = useState(false)
+        cell: ({ row }) => {
           const log = row.original
-          const other = parseLogOther(log.other)
-
-          const pricingData = usePricingData(
-            log.type === 2 &&
-              other?.is_task === true &&
-              other.billing_mode === 'tiered_expr'
-          )
-          const usageSchema = pluginUsageSchema(
-            pricingData.models.find(
-              (model) => model.model_name === log.model_name
-            ),
-            other?.admin_info?.task_plugin?.key
-          )
-          const segments = buildDetailSegments(
-            log,
-            other,
-            t,
-            isAdminView,
-            i18n.language,
-            usageSchema
-          )
-          const primary = segments[0]
-          const hasMore = segments.length > 1
-          let primaryTextClass = 'text-foreground'
-          if (primary?.muted) {
-            primaryTextClass = 'text-muted-foreground/60'
-          } else if (primary?.danger) {
-            primaryTextClass = 'text-red-600 dark:text-red-400'
-          }
-          let detailPreview = (
-            <span className='text-muted-foreground/40'>—</span>
-          )
-          if (primary) {
-            detailPreview = (
-              <span
-                className={cn(
-                  'truncate leading-snug group-hover:underline',
-                  primaryTextClass
-                )}
-              >
-                {primary.text}
-                {hasMore && (
-                  <span className='text-muted-foreground/40 ml-0.5'>
-                    +{segments.length - 1}
-                  </span>
-                )}
-              </span>
-            )
-          } else if (log.content) {
-            detailPreview = (
-              <span className='text-muted-foreground truncate group-hover:underline'>
-                {renderLogContent(other, t) ?? log.content}
-              </span>
-            )
-          }
-
           return (
-            <>
-              <Button
-                type='button'
-                variant='ghost'
-                className='group h-auto max-w-[200px] min-w-0 justify-start gap-1.5 p-0 text-left text-xs font-normal'
-                onClick={() => setDialogOpen(true)}
-                title={t('Click to view full details')}
-              >
-                {detailPreview}
-              </Button>
-              <DetailsDialog
-                log={log}
-                isAdminView={isAdminView}
-                isRoot={isRoot}
-                canViewModelRoute={canViewModelRoute}
-                open={dialogOpen}
-                onOpenChange={setDialogOpen}
-              />
-            </>
+            <DetailsCellContent
+              log={log}
+              isAdminView={isAdminView}
+              isRoot={isRoot}
+              canViewModelRoute={canViewModelRoute}
+              dialogOpen={openDetailsLogId === log.id}
+              onDialogOpenChange={(open) =>
+                setOpenDetailsLogId(open ? log.id : null)
+              }
+            />
           )
         },
         size: 180,
@@ -1046,5 +985,99 @@ export function useCommonLogsColumns(
     return columns
     // Log formatters read currency settings from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, isAdminView, isRoot, canViewModelRoute, showBillingSource, currency])
+  }, [
+    t,
+    isAdminView,
+    isRoot,
+    canViewModelRoute,
+    showBillingSource,
+    currency,
+    openDetailsLogId,
+  ])
+}
+
+// eslint-disable-next-line react-refresh/only-export-components -- Internal cell renderer; it is not a Fast Refresh export.
+function DetailsCellContent(props: {
+  log: UsageLog
+  isAdminView: boolean
+  isRoot: boolean
+  canViewModelRoute: boolean
+  dialogOpen: boolean
+  onDialogOpenChange: (open: boolean) => void
+}) {
+  const { t, i18n } = useTranslation()
+  const other = parseLogOther(props.log.other)
+  const pricingData = usePricingData(
+    props.log.type === 2 &&
+      other?.is_task === true &&
+      other.billing_mode === 'tiered_expr'
+  )
+  const usageSchema = pluginUsageSchema(
+    pricingData.models.find(
+      (model) => model.model_name === props.log.model_name
+    ),
+    other?.admin_info?.task_plugin?.key
+  )
+  const segments = buildDetailSegments(
+    props.log,
+    other,
+    t,
+    props.isAdminView,
+    i18n.language,
+    usageSchema
+  )
+  const primary = segments[0]
+  const hasMore = segments.length > 1
+  let primaryTextClass = 'text-foreground'
+  if (primary?.muted) {
+    primaryTextClass = 'text-muted-foreground/60'
+  } else if (primary?.danger) {
+    primaryTextClass = 'text-red-600 dark:text-red-400'
+  }
+  let detailPreview = <span className='text-muted-foreground/40'>—</span>
+  if (primary) {
+    detailPreview = (
+      <span
+        className={cn(
+          'truncate leading-snug group-hover:underline',
+          primaryTextClass
+        )}
+      >
+        {primary.text}
+        {hasMore && (
+          <span className='text-muted-foreground/40 ml-0.5'>
+            +{segments.length - 1}
+          </span>
+        )}
+      </span>
+    )
+  } else if (props.log.content) {
+    detailPreview = (
+      <span className='text-muted-foreground truncate group-hover:underline'>
+        {renderLogContent(other, t) ?? props.log.content}
+      </span>
+    )
+  }
+
+  return (
+    <>
+      <Button
+        type='button'
+        variant='ghost'
+        className='group h-auto max-w-[200px] min-w-0 justify-start gap-1.5 p-0 text-left text-xs font-normal'
+        onClick={() => props.onDialogOpenChange(true)}
+        title={t('Click to view full details')}
+      >
+        {detailPreview}
+      </Button>
+      <DetailsDialog
+        log={props.log}
+        isAdminView={props.isAdminView}
+        isRoot={props.isRoot}
+        canViewModelRoute={props.canViewModelRoute}
+        open={props.dialogOpen}
+        onOpenChange={props.onDialogOpenChange}
+      />
+    </>
+  )
 }

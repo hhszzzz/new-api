@@ -32,6 +32,54 @@ export const ADVANCED_CUSTOM_BALANCE_PATH =
   '/v1/dashboard/billing/credit_grants'
 export const ADVANCED_CUSTOM_BALANCE_LABEL = 'Balance Query'
 
+export const ADVANCED_CUSTOM_CONVERTER_OPTIONS = [
+  {
+    value: 'anthropic_messages_to_openai_chat_completions',
+    label: 'Anthropic Messages to OpenAI Chat',
+    triggerLabel: 'To OpenAI Chat',
+  },
+  {
+    value: 'claude_messages_to_openai_responses',
+    label: 'Anthropic Messages to OpenAI Responses',
+    triggerLabel: 'To OpenAI Responses',
+  },
+  {
+    value: 'openai_chat_completions_to_anthropic_messages',
+    label: 'OpenAI Chat to Anthropic Messages',
+    triggerLabel: 'To Anthropic Messages',
+  },
+  {
+    value: 'openai_chat_completions_to_openai_responses',
+    label: 'OpenAI Chat to OpenAI Responses',
+    triggerLabel: 'To OpenAI Responses',
+  },
+  {
+    value: 'openai_responses_to_openai_chat_completions',
+    label: 'OpenAI Responses to OpenAI Chat',
+    triggerLabel: 'To OpenAI Chat',
+  },
+  {
+    value: 'openai_responses_to_gemini_generate_content',
+    label: 'OpenAI Responses to Gemini Generate Content',
+    triggerLabel: 'To Gemini Generate Content',
+  },
+  {
+    value: 'gemini_generate_content_to_openai_chat_completions',
+    label: 'Gemini Generate Content to OpenAI Chat',
+    triggerLabel: 'To OpenAI Chat',
+  },
+  {
+    value: 'gemini_generate_content_to_openai_responses',
+    label: 'Gemini Generate Content to OpenAI Responses',
+    triggerLabel: 'To OpenAI Responses',
+  },
+  {
+    value: 'openai_chat_completions_to_gemini_generate_content',
+    label: 'OpenAI Chat to Gemini Generate Content',
+    triggerLabel: 'To Gemini Generate Content',
+  },
+] as const
+
 export type AdvancedCustomAuthMode = 'default' | AdvancedCustomAuthType
 
 export const ADVANCED_CUSTOM_AUTH_MODE_OPTIONS: Array<{

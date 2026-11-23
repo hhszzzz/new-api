@@ -118,7 +118,18 @@ func OaiStreamHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Re
 		return nil, streamErr
 	}
 	if err := streamStatusError(info); err != nil {
+		// The final data frame is held so the handler can inspect terminal
+		// usage and finish metadata. If the upstream ends abnormally, deliver
+		// that already-received frame before reporting the read failure.
+		if lastStreamData != "" {
+			if writeErr := HandleStreamFormat(c, info, lastStreamData); writeErr != nil {
+				return usage, hosttypes.NewOpenAIError(writeErr, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
+			}
+		}
 		return nil, hosttypes.NewOpenAIError(err, hosttypes.ErrorCodeBadResponse, http.StatusBadGateway)
+	}
+	if info.ReplyPluginStopped {
+		return service.ResponseText2Usage(c, info.ReplyPluginReleasedText, info.UpstreamModelName, info.GetEstimatePromptTokens()), nil
 	}
 	if info.RelayMode == relayconstant.RelayModeChatCompletions && !upstreamCompleted {
 		missingTerminalErr := fmt.Errorf("Chat Completions stream ended without a terminal finish_reason")

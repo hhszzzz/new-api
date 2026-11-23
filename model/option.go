@@ -184,14 +184,9 @@ func InitOptionMap() {
 	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
 	common.OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.MjForwardUrlEnabled)
 	common.OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.MjActionCheckSuccessEnabled)
-	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
 	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
 	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
 	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
-	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
-	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
-	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
-	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
 	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
 	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
 	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
@@ -202,19 +197,15 @@ func InitOptionMap() {
 	maps.Copy(common.OptionMap, modelConfigs)
 
 	common.OptionMapRWMutex.Unlock()
-	loadOptionsFromDatabase()
+	if err := LoadOptionsFromDatabase(); err != nil {
+		common.SysError(common.LogText("failed to load options from database: %s", err.Error()))
+	}
 }
 
 func loadOptionsFromDatabase() {
-	optionUpdateMu.Lock()
-	defer optionUpdateMu.Unlock()
-
-	options, err := AllOption()
-	if err != nil {
+	if err := LoadOptionsFromDatabase(); err != nil {
 		common.SysLog("failed to load options from database: " + err.Error())
-		return
 	}
-	publishPersistedOptions(options)
 }
 
 // publishPersistedOptions groups modular settings before validation so a
@@ -224,13 +215,13 @@ func publishPersistedOptions(options []*Option) {
 	pricingValues := make(map[string]string)
 	requestPolicyOptionMutex.Lock()
 	defer requestPolicyOptionMutex.Unlock()
+	passkeyOptionMutex.Lock()
+	defer passkeyOptionMutex.Unlock()
 	defer func() {
 		if err := refreshRequestPolicySnapshot(); err != nil {
 			common.SysError(common.LogText("invalid request policy: %s", err.Error()))
 		}
 	}()
-	passkeyOptionMutex.Lock()
-	defer passkeyOptionMutex.Unlock()
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
 		if IsPasskeyDomainOption(option.Key) {
@@ -322,11 +313,26 @@ func publishPersistedOptions(options []*Option) {
 	}
 }
 
+// LoadOptionsFromDatabase applies every stored option. A failed read keeps
+// the options in memory as they are.
+func LoadOptionsFromDatabase() error {
+	optionUpdateMu.Lock()
+	defer optionUpdateMu.Unlock()
+	options, err := AllOption()
+	if err != nil {
+		return err
+	}
+	publishPersistedOptions(options)
+	return nil
+}
+
 func SyncOptions(frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		common.SysLog(common.LogText("syncing options from database"))
-		loadOptionsFromDatabase()
+		if err := LoadOptionsFromDatabase(); err != nil {
+			common.SysError(common.LogText("failed to load options from database: %s", err.Error()))
+		}
 	}
 }
 
@@ -369,6 +375,9 @@ func validateOptionValue(key string, value string) error {
 	}
 	if key == operation_setting.LogMaxRangeDaysOptionKey {
 		return operation_setting.ValidateLogMaxRangeDays(value)
+	}
+	if key == operation_setting.SystemTaskRetentionDaysOptionKey {
+		return operation_setting.ValidateSystemTaskRetentionDays(value)
 	}
 	if key == "MaxTokenAutoGroups" {
 		return setting.ValidateMaxTokenAutoGroups(value)
@@ -527,6 +536,7 @@ func updateOptionsBulk(values map[string]string, preview bool, confirmation stri
 	if err != nil {
 		return passkeyChange, err
 	}
+	BumpSyncTopic(SyncTopicOptions)
 	// Trust settings were normalized while holding the database locks. Publish
 	// that complete domain set, rather than the unnormalized config input.
 	if hasPasskeyChange {
@@ -853,8 +863,6 @@ func updateOptionMapWithSource(key string, value string, fromDB bool) (err error
 			setting.SetCheckSensitiveOnPromptEnabled(boolValue)
 		case "ModelRequestRateLimitEnabled":
 			setting.ModelRequestRateLimitEnabled = boolValue
-		case "StopOnSensitiveEnabled":
-			setting.StopOnSensitiveEnabled = boolValue
 		case "SMTPSSLEnabled":
 			common.SMTPSSLEnabled = boolValue
 		case "SMTPStartTLSEnabled":
@@ -1092,8 +1100,6 @@ func updateOptionMapWithSource(key string, value string, fromDB bool) (err error
 		err = operation_setting.AutomaticDisableStatusCodesFromString(value)
 	case "AutomaticRetryStatusCodes":
 		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
-	case "StreamCacheQueueLength":
-		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
 	case "PayMethods":
 		err = operation_setting.UpdatePayMethodsByJsonString(value)
 	case "WaffoPayMethods":

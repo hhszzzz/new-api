@@ -144,16 +144,13 @@ export function UpstreamRatioSync() {
     enabled: channelDialogOpen,
   })
   const channels = useMemo(() => channelsData?.data ?? [], [channelsData?.data])
-  const channelEndpoints = useMemo(
-    () => {
-      const defaults: Record<number, string> = {}
-      for (const channel of channels) {
-        defaults[channel.id] = getDefaultEndpointForChannel(channel)
-      }
-      return { ...defaults, ...channelEndpointOverrides }
-    },
-    [channels, channelEndpointOverrides]
-  )
+  const channelEndpoints = useMemo(() => {
+    const defaults: Record<number, string> = {}
+    for (const channel of channels) {
+      defaults[channel.id] = getDefaultEndpointForChannel(channel)
+    }
+    return { ...defaults, ...channelEndpointOverrides }
+  }, [channels, channelEndpointOverrides])
   const adjustedPrices = useMemo(
     () =>
       Object.fromEntries(

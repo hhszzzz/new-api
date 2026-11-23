@@ -74,7 +74,12 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
   )
 
   return useMutation({
-    mutationFn: async ({ data }: ChannelMutateRequest): Promise<string> => {
+    mutationFn: async ({
+      data,
+    }: ChannelMutateRequest): Promise<{
+      messageKey: string
+      channelId?: number
+    }> => {
       if (props.isEditing && props.currentRow) {
         const payload = transformFormDataToUpdatePayload(
           data,
@@ -108,7 +113,7 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
         if (!response.success) {
           throw createServerError(response, t(ERROR_MESSAGES.UPDATE_FAILED))
         }
-        return SUCCESS_MESSAGES.UPDATED
+        return { messageKey: SUCCESS_MESSAGES.UPDATED }
       }
 
       const payload = transformFormDataToCreatePayload(data)
@@ -116,11 +121,15 @@ export function useChannelMutateForm(props: UseChannelMutateFormParams) {
       if (!response.success) {
         throw createServerError(response, t(ERROR_MESSAGES.CREATE_FAILED))
       }
-      return SUCCESS_MESSAGES.CREATED
+      // A login plugin opens its login dialog on the new channel.
+      return {
+        messageKey: SUCCESS_MESSAGES.CREATED,
+        channelId: response.data?.ids?.[0],
+      }
     },
-    onSuccess: (messageKey, request) => {
+    onSuccess: (result, request) => {
       if (!request.isCurrent()) return
-      toast.success(t(messageKey))
+      toast.success(t(result.messageKey))
       props.onSuccess()
     },
     onError: (error: unknown, request) => {

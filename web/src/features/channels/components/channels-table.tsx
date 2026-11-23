@@ -18,10 +18,15 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
 import { getRouteApi } from '@tanstack/react-router'
-import type { ColumnDef, OnChangeFn, Row, SortingState } from '@tanstack/react-table'
+import type {
+  ColumnDef,
+  OnChangeFn,
+  Row,
+  SortingState,
+} from '@tanstack/react-table'
 import { AlertTriangle, Eye, EyeOff, Pencil, RefreshCw } from 'lucide-react'
-import { createPortal } from 'react-dom'
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
 
 import {
@@ -335,7 +340,8 @@ export function ChannelsTable() {
     defaultMode: 'card',
   })
   const user = useAuthStore((state) => state.auth.user)
-  const sortField = (sorting[0]?.id ?? (idSort ? 'id' : 'priority')) as ChannelSortBy
+  const sortField = (sorting[0]?.id ??
+    (idSort ? 'id' : 'priority')) as ChannelSortBy
   const sortDesc = sorting[0]?.desc ?? true
   const [reorderEnabled, setReorderEnabled] = useState(false)
   const canReorder =

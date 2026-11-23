@@ -654,6 +654,15 @@ relay.no_channel_supports_request_path: "分组 {{.Group}} 下模型 {{.Model}} 
 relay.request_body_too_large: "请求体过大"
 relay.model_price_not_configured: "模型 {{.Model}} 尚未配置价格，请联系站点管理员启用该模型。"
 relay.model_price_not_configured_admin: "模型 {{.Model}} 尚未配置价格。请前往系统设置 → 运营设置启用自用模式，或在系统设置 → 分组与模型定价中配置价格。"
+relay.task_price_not_configured: "模型 {{.Model}} 没有插件 {{.Plugin}} 的任务价格，请在模型定价中为该插件单独设置价格"
+relay.group_saturated: "当前分组负载已饱和，请稍后再试，或升级账户以提升服务质量。"
+relay.group_upstream_saturated: "当前分组上游负载已饱和，请稍后再试"
+relay.retry_get_channel_failed: "获取分组 {{.Group}} 下模型 {{.Model}} 的可用渠道失败（retry）: {{.Error}}"
+relay.retry_no_available_channel: "分组 {{.Group}} 下模型 {{.Model}} 的可用渠道不存在（retry）"
+relay.access_token_unsupported: "暂不支持使用 access token"
+relay.request_rejected: "请求被策略拒绝"
+relay.request_plugin_failed: "请求处理插件执行失败"
+relay.response_rejected: "回复被策略中止"
 
 # Setup messages
 setup.already_initialized: "系统已经初始化完成"
@@ -760,3 +769,8 @@ channel.upstream_update_added_models: "新增模型示例（展示 {{.Shown}}/{{
 channel.upstream_update_removed_models: "删除模型示例（展示 {{.Shown}}/{{.Total}}）：{{.Models}}"
 channel.upstream_update_failed_channels: "失败渠道 ID（展示 {{.Shown}}/{{.Total}}）：{{.Ids}}"
 channel.upstream_update_more_omitted: "（其余 {{.Count}} 个已省略）"
+
+channel.notify_scheduled_subject: "渠道“{{.Name}}” (#{{.Id}}) 插件通知"
+quota.subscription_insufficient: "订阅额度不足"
+quota.pre_consume_insufficient: "预扣额度不足，无法处理此请求"
+quota.user_insufficient: "用户额度不足"

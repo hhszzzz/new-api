@@ -245,7 +245,9 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 		return
 	}
 
-	if writer, ok := c.Writer.(*streamKeepAliveWriter); ok {
+	// Finish the request keepalive before changing headers. The scanner owns
+	// subsequent ping and data writes through its shared write mutex.
+	if writer := keepAliveWriter(c); writer != nil {
 		writer.stop()
 	}
 
@@ -551,6 +553,14 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 			}
 		case <-clientDone:
 			if !clientGone {
+				if info.StreamStatus.Snapshot().EndReason == relaycommon.StreamEndReasonHandlerStop {
+					clientDone = nil
+					draining.Store(false)
+					stopHandler()
+					info.StreamStatus.SetDrainResult(relaycommon.StreamDrainNotNeeded)
+					finished = true
+					continue
+				}
 				clientGone = true
 				draining.Store(true)
 				// Stop downstream handling immediately while leaving the scanner's
@@ -580,7 +590,7 @@ func StreamScannerHandlerWithOptions(c *gin.Context, resp *http.Response, info *
 	// Cancellation may become visible in the same scheduler turn as handler
 	// completion. Record it after the loop; delivered terminal success still wins
 	// in StreamStatus.Snapshot.
-	if c.Request.Context().Err() != nil {
+	if c.Request.Context().Err() != nil && !info.ReplyPluginStopped {
 		clientGone = true
 		info.StreamStatus.MarkClientGone(c.Request.Context().Err())
 		if info.StreamStatus.HasTerminalDelivered() && info.StreamStatus.Snapshot().DrainResult == "" {

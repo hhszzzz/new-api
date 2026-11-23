@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useQuery } from '@tanstack/react-query'
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useForm, useWatch } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -143,12 +143,34 @@ export function RedemptionsMutateDrawer({
   const [createdCodes, setCreatedCodes] = useState<RedemptionExportData | null>(
     null
   )
-  const [redemptionLoadState, setRedemptionLoadState] = useState<
-    'idle' | 'loading' | 'ready' | 'error'
-  >('idle')
-  const [loadedRedemption, setLoadedRedemption] = useState<Redemption | null>(
-    null
+  const loadKey = useMemo(
+    () =>
+      Symbol(
+        `${open ? 'open' : 'closed'}:${isUpdate ? 'update' : 'create'}:${redemptionId ?? ''}`
+      ),
+    [open, isUpdate, redemptionId]
   )
+  const [redemptionLoad, setRedemptionLoad] = useState<{
+    key: symbol | null
+    state: 'idle' | 'loading' | 'ready' | 'error'
+    redemption: Redemption | null
+  }>({ key: null, state: 'idle', redemption: null })
+  let fallbackRedemptionLoadState: 'idle' | 'loading' | 'ready' = 'idle'
+  if (open && isUpdate) {
+    fallbackRedemptionLoadState = 'loading'
+  } else if (open) {
+    fallbackRedemptionLoadState = 'ready'
+  }
+  const activeRedemptionLoad =
+    redemptionLoad.key === loadKey
+      ? redemptionLoad
+      : {
+          key: loadKey,
+          state: fallbackRedemptionLoadState,
+          redemption: null,
+        }
+  const redemptionLoadState = activeRedemptionLoad.state
+  const loadedRedemption = activeRedemptionLoad.redemption
 
   const form = useForm<RedemptionFormValues>({
     resolver: zodResolver(getRedemptionFormSchema(t)),
@@ -177,24 +199,9 @@ export function RedemptionsMutateDrawer({
     invalidateSubmitTask()
   }, [redemptionId, invalidateSubmitTask, open])
 
-  const loadKey = `${open ? 'open' : 'closed'}:${isUpdate ? 'update' : 'create'}:${redemptionId ?? ''}`
-  const [prevLoadKey, setPrevLoadKey] = useState<string | null>(null)
-  if (prevLoadKey !== loadKey) {
-    setPrevLoadKey(loadKey)
-    if (!open) {
-      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-      setRedemptionLoadState('idle')
-      setLoadedRedemption(null)
-    } else if (!isUpdate || redemptionId === undefined) {
-      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-      setRedemptionLoadState('ready')
-      setLoadedRedemption(null)
-    } else {
-      form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
-      setRedemptionLoadState('loading')
-      setLoadedRedemption(null)
-    }
-  }
+  useEffect(() => {
+    form.reset(REDEMPTION_FORM_DEFAULT_VALUES)
+  }, [form, loadKey])
 
   // Load existing data when updating
   useEffect(() => {
@@ -211,26 +218,29 @@ export function RedemptionsMutateDrawer({
           !result.data ||
           result.data.id !== redemptionId
         ) {
-          setRedemptionLoadState('error')
+          setRedemptionLoad({ key: loadKey, state: 'error', redemption: null })
           handleServerError(result, t('Failed to load'))
           return
         }
 
         form.reset(transformRedemptionToFormDefaults(result.data))
-        setLoadedRedemption(result.data)
-        setRedemptionLoadState('ready')
+        setRedemptionLoad({
+          key: loadKey,
+          state: 'ready',
+          redemption: result.data,
+        })
       })
       .catch((error: unknown) => {
         if (ignoreResult) return
 
-        setRedemptionLoadState('error')
+        setRedemptionLoad({ key: loadKey, state: 'error', redemption: null })
         handleServerError(error)
       })
 
     return () => {
       ignoreResult = true
     }
-  }, [open, isUpdate, redemptionId, form, t])
+  }, [open, isUpdate, redemptionId, form, loadKey, t])
 
   const isUpdateReady =
     !isUpdate ||

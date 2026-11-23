@@ -179,6 +179,7 @@ func UpdateModelMeta(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
+		model.BumpSyncTopic(model.SyncTopicModels)
 	} else {
 		if strings.TrimSpace(m.ModelName) == "" {
 			common.ApiErrorI18n(c, i18n.MsgModelNameEmpty)

@@ -872,6 +872,11 @@ export function PaymentSettingsSection({
     WaffoPancakeReturnURL: currentFormValues.WaffoPancakeReturnURL,
   }
 
+  // React Hook Form reads its internal refs when this handler is invoked by
+  // the form or save button, not during render.
+  // oxlint-disable-next-line react/refs
+  const submitHandler = form.handleSubmit(onSubmit)
+
   return (
     <SettingsSection title={t('Payment Gateway')}>
       {!complianceConfirmed ? (
@@ -939,7 +944,7 @@ export function PaymentSettingsSection({
 
       <Form {...form}>
         <SettingsForm
-          onSubmit={form.handleSubmit(onSubmit)}
+          onSubmit={submitHandler}
           className={cn(
             'gap-y-8',
             !complianceConfirmed && 'pointer-events-none opacity-40'
@@ -947,7 +952,7 @@ export function PaymentSettingsSection({
           data-no-autosubmit='true'
         >
           <SettingsPageFormActions
-            onSave={form.handleSubmit(onSubmit)}
+            onSave={submitHandler}
             isSaving={updateOption.isPending || isSubmitting}
             saveLabel='Save all settings'
           />

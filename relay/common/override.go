@@ -6,7 +6,6 @@ import (
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"maps"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -14,6 +13,7 @@ import (
 	"sync"
 
 	"github.com/MoeForge/moego/ojson"
+	"github.com/MoeForge/moego/regexp"
 	"github.com/QuantumNous/new-api/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
@@ -234,6 +234,7 @@ func ApplyParamOverrideWithRelayInfo(jsonData []byte, info *RelayInfo) ([]byte, 
 		}
 	}
 	syncReasoningEffortAfterParamOverride(info, jsonData, result)
+	markRequestPluginOverrides(info, jsonData, result)
 	syncRuntimeHeaderOverrideFromContext(info, overrideCtx)
 	if info != nil {
 		if recorder != nil {
@@ -249,8 +250,8 @@ func syncReasoningEffortAfterParamOverride(info *RelayInfo, before, after []byte
 	if info == nil {
 		return
 	}
-	_, existedBefore := extractReasoningEffortFromJSON(info.GetFinalRequestRelayFormat(), before)
-	effort, existsAfter := extractReasoningEffortFromJSON(info.GetFinalRequestRelayFormat(), after)
+	_, existedBefore := ReasoningEffortFromJSON(info.GetFinalRequestRelayFormat(), before)
+	effort, existsAfter := ReasoningEffortFromJSON(info.GetFinalRequestRelayFormat(), after)
 	if existsAfter {
 		info.SetReasoningEffort(effort)
 		return
@@ -260,7 +261,9 @@ func syncReasoningEffortAfterParamOverride(info *RelayInfo, before, after []byte
 	}
 }
 
-func extractReasoningEffortFromJSON(format types.RelayFormat, data []byte) (string, bool) {
+// ReasoningEffortFromJSON reads the reasoning effort a JSON body of format
+// sets, and whether the body holds a reasoning control at all.
+func ReasoningEffortFromJSON(format types.RelayFormat, data []byte) (string, bool) {
 	switch format {
 	case types.RelayFormatOpenAI:
 		if effort, exists := firstStringValue(data, "reasoning_effort"); exists && effort != "" {

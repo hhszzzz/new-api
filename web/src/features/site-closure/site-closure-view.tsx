@@ -83,9 +83,7 @@ export function SiteClosureView({
               503
             </span>
             <h1 className='text-3xl font-semibold tracking-tight text-balance sm:text-4xl'>
-              {hasCustomTitle
-                ? title
-                : t('Website is under maintenance!')}
+              {hasCustomTitle ? title : t('Website is under maintenance!')}
             </h1>
 
             {hasCustomMessage ? (
@@ -116,9 +114,7 @@ export function SiteClosureView({
               </Button>
               <Button
                 variant='ghost'
-                render={
-                  <Link to='/sign-in' search={{ redirect: '/' }} />
-                }
+                render={<Link to='/sign-in' search={{ redirect: '/' }} />}
               >
                 {t('Admin sign in')}
               </Button>

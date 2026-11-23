@@ -80,7 +80,9 @@ export function NotificationTab({
     normalizeUserSettings(profile?.setting)
   )
   const [thresholdInput, setThresholdInput] = useState(() => {
-    const threshold = normalizeUserSettings(profile?.setting).quota_warning_threshold
+    const threshold = normalizeUserSettings(
+      profile?.setting
+    ).quota_warning_threshold
     return threshold ? String(quotaUnitsToDollars(threshold)) : ''
   })
   const [syncedProfile, setSyncedProfile] = useState(profile)

@@ -63,7 +63,6 @@ func PrepareRequestBilling(c *gin.Context, info *relaycommon.RelayInfo) *hosttyp
 			service.DeferPromptAuditStored(c, auditRequest)
 		}
 	}
-
 	tokens, err := service.EstimateRequestToken(c, meta, info)
 	if err != nil {
 		return hosttypes.NewError(err, hosttypes.ErrorCodeCountTokenFailed)

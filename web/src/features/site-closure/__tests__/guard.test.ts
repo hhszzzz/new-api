@@ -132,9 +132,9 @@ describe('isSiteClosureBlocked', () => {
 
   it('lets administrators and server-approved bypasses through', () => {
     expect(isSiteClosureBlocked(closed, ROLE.ADMIN, '/dashboard')).toBe(false)
-    expect(
-      isSiteClosureBlocked(closed, ROLE.SUPER_ADMIN, '/dashboard')
-    ).toBe(false)
+    expect(isSiteClosureBlocked(closed, ROLE.SUPER_ADMIN, '/dashboard')).toBe(
+      false
+    )
     expect(
       isSiteClosureBlocked(
         parseSiteClosureStatus({

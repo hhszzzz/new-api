@@ -24,6 +24,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
@@ -93,6 +94,14 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		defer ws.Close()
 	}
 
+	var ingressRecord []relaycommon.RequestPluginRecord
+	// Registered first so that it runs last: the request plugins' report
+	// hooks receive the request once the client has the whole response and
+	// the request has settled.
+	defer func() {
+		requestplugin.Report(c, relayFormat, relayInfo, ingressRecord, newAPIError)
+	}()
+
 	defer func() {
 		if newAPIError != nil {
 			service.RecordRequestPolicyTermination(c, newAPIError)
@@ -119,8 +128,24 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		}
 	}()
 
+	// Ingress takes the request plugin plan and may patch the stored body
+	// before it is parsed. A Realtime session runs its instances on its
+	// events instead.
+	var ingressSteps []relaycommon.RequestPluginStep
+	requestChanged := false
+	if relayFormat == types.RelayFormatOpenAIRealtime {
+		requestplugin.StartRealtime(c)
+	} else if requestChanged, ingressSteps, ingressRecord, newAPIError = requestplugin.IngressWithChange(c, relayFormat); newAPIError != nil {
+		// The request reached no channel; its error log shows what the
+		// plugins did.
+		ingress := &relaycommon.RelayInfo{}
+		ingress.SetRequestPluginIngress(ingressSteps, ingressRecord)
+		service.RecordRelayErrorLog(c, 0, newAPIError, ingress)
+		return
+	}
+
 	request, requestCached := common.GetContextKeyType[dto.Request](c, constant.ContextKeyValidatedRelayRequest)
-	if !requestCached {
+	if !requestCached || requestChanged {
 		request, err = helper.GetAndValidateRequest(c, relayFormat)
 	}
 	if err != nil {
@@ -140,6 +165,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 		newAPIError = hosttypes.NewError(err, hosttypes.ErrorCodeGenRelayInfoFailed)
 		return
 	}
+	relayInfo.SetRequestPluginIngress(ingressSteps, ingressRecord)
 	if relayFormat == types.RelayFormatGemini {
 		relay.ConfigureGeminiBillingModel(relayInfo)
 	}
@@ -292,6 +318,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 				return
 			}
 			c.Request.Body = io.NopCloser(bodyStorage)
+			finishReply := requestplugin.Reply(c, relayFormat, relayInfo)
 			// The request is now handed to the selected channel; only at this
 			// point does a store-only audit row describe something forwarded.
 			service.CommitPromptAuditStored(c)
@@ -307,6 +334,7 @@ func Relay(c *gin.Context, relayFormat types.RelayFormat) {
 			default:
 				newAPIError = relayHandler(c, relayInfo)
 			}
+			finishReply()
 		}()
 		if !forwarded {
 			break
@@ -405,6 +433,8 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 	if apiError == nil {
 		return
 	}
+	streamResponse := c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream &&
+		!common.GetContextKeyBool(c, constant.ContextKeyStreamErrorBeforeOutput)
 	switch relayFormat {
 	case types.RelayFormatOpenAIRealtime:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
@@ -416,8 +446,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		// 上下文上限拦截模拟真实 Anthropic API 的流前校验：即便请求带 stream 也以
 		// HTTP 400 JSON 返回（客户端在流开始前识别 prompt-too-long 并触发本地压缩）；
 		// SSE 事件通道对这类错误的识别不可靠。
-		if apiError.GetErrorCode() != hosttypes.ErrorCodeContextLimitExceeded &&
-			(c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream) {
+		if apiError.GetErrorCode() != hosttypes.ErrorCodeContextLimitExceeded && streamResponse {
 			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ClaudeData(c, dto.ClaudeResponse{Type: "error", Error: publicError}); err != nil {
@@ -425,6 +454,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			}
 			return
 		}
+		clearUncommittedStreamHeaders(c)
 		c.JSON(apiError.StatusCode, gin.H{
 			"type":  "error",
 			"error": publicError,
@@ -443,7 +473,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			}
 			return
 		}
-		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+		if streamResponse {
 			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
 			if err := helper.ResponsesErrorData(c, publicError); err != nil {
@@ -451,6 +481,7 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			}
 			return
 		}
+		clearUncommittedStreamHeaders(c)
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 	default:
 		publicError := relaycommon.SanitizeUserModelRouteOpenAIError(apiError.ToOpenAIError(), privacyInfo)
@@ -458,10 +489,11 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 		// 超限拦截模拟真实 OpenAI API 的流前校验：即便请求带 stream 也以 HTTP 400
 		// JSON 返回（客户端在流开始前识别 context_length_exceeded）。
 		if apiError.GetErrorCode() == hosttypes.ErrorCodeContextLimitExceeded {
+			clearUncommittedStreamHeaders(c)
 			c.JSON(apiError.StatusCode, gin.H{"error": publicError})
 			return
 		}
-		if c.Writer.Written() || privacyInfo != nil && privacyInfo.IsStream {
+		if streamResponse {
 			streamAlreadyStarted := c.Writer.Written()
 			markRelayStreamFailure(c, apiError, privacyInfo, publicError.Type)
 			helper.SetEventStreamHeaders(c)
@@ -474,7 +506,17 @@ func writeRelayErrorResponse(c *gin.Context, relayFormat types.RelayFormat, apiE
 			}
 			return
 		}
+		clearUncommittedStreamHeaders(c)
 		c.JSON(apiError.StatusCode, gin.H{"error": publicError})
+	}
+}
+
+func clearUncommittedStreamHeaders(c *gin.Context) {
+	if c == nil || c.Writer == nil || c.Writer.Written() {
+		return
+	}
+	for _, header := range []string{"Content-Type", "Cache-Control", "Connection", "Transfer-Encoding", "X-Accel-Buffering"} {
+		c.Writer.Header().Del(header)
 	}
 }
 
@@ -673,6 +715,13 @@ func RelayMidjourney(c *gin.Context) {
 			service.RecordRequestPolicyTermination(c, hosttypes.NewErrorWithStatusCode(errors.New("Midjourney submission failed"), hosttypes.ErrorCodeBadResponseStatusCode, http.StatusBadGateway, hosttypes.ErrOptionWithSkipRetry()))
 		}
 	}()
+	var relayInfo *relaycommon.RelayInfo
+	var reportErr *hosttypes.NewAPIError
+	// Registered first so that it runs last: the request plugins' report
+	// hooks receive a submission once the client has the response.
+	defer func() {
+		requestplugin.Report(c, types.RelayFormatMjProxy, relayInfo, nil, reportErr)
+	}()
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatMjProxy, nil, nil)
 
 	if err != nil {
@@ -725,10 +774,24 @@ func RelayMidjourney(c *gin.Context) {
 		mjErr = relay.RelayMidjourneyTask(c, relayInfo.RelayMode)
 	case relayconstant.RelayModeMidjourneyTaskImageSeed:
 		mjErr = relay.RelayMidjourneyTaskImageSeed(c)
-	case relayconstant.RelayModeSwapFace:
-		mjErr = relay.RelaySwapFace(c, relayInfo)
 	default:
-		mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
+		if reportErr = midjourneyRequestPlugins(c, relayInfo); reportErr != nil {
+			code := constant.MjRequestError
+			if reportErr.StatusCode >= http.StatusInternalServerError {
+				code = constant.MjErrorUnknown
+			}
+			c.JSON(reportErr.StatusCode, gin.H{
+				"description": common.MessageWithRequestId(reportErr.Error(), c.GetString(common.RequestIdKey)),
+				"type":        string(reportErr.GetErrorCode()),
+				"code":        code,
+			})
+			return
+		}
+		if relayInfo.RelayMode == relayconstant.RelayModeSwapFace {
+			mjErr = relay.RelaySwapFace(c, relayInfo)
+		} else {
+			mjErr = relay.RelayMidjourneySubmit(c, relayInfo)
+		}
 	}
 	//err = relayMidjourneySubmit(c, relayMode)
 	log.Println(mjErr)
@@ -739,6 +802,7 @@ func RelayMidjourney(c *gin.Context) {
 			mjErr.Result = i18n.T(c, i18n.MsgChannelUpstreamSaturated)
 			statusCode = http.StatusTooManyRequests
 		}
+		reportErr = hosttypes.NewErrorWithStatusCode(fmt.Errorf("%s %s", mjErr.Description, mjErr.Result), hosttypes.ErrorCodeBadResponseStatusCode, statusCode)
 		c.JSON(statusCode, gin.H{
 			"description": fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result),
 			"type":        "upstream_error",
@@ -747,6 +811,27 @@ func RelayMidjourney(c *gin.Context) {
 		channelId := c.GetInt("channel_id")
 		logger.LogError(c, common.LogText("relay error (channel #%d, status code %d): %s", channelId, statusCode, fmt.Sprintf("%s %s", mjErr.Description, mjErr.Result)))
 	}
+}
+
+// midjourneyRequestPlugins runs the request plugins of a Midjourney
+// submission on its client body before the body is read: the request's
+// ingress, then the late ingress of its channel. A Midjourney submission
+// has one attempt, so the late record stays with the request's. A stop is
+// written to the error log.
+func midjourneyRequestPlugins(c *gin.Context, relayInfo *relaycommon.RelayInfo) *hosttypes.NewAPIError {
+	_, steps, record, apiErr := requestplugin.SubmitIngress(c, types.RelayFormatMjProxy, common.GetContextKeyString(c, constant.ContextKeyOriginalModel))
+	relayInfo.SetRequestPluginIngress(steps, record)
+	channelID := 0
+	if apiErr == nil {
+		relayInfo.InitChannelMeta(c)
+		channelID = relayInfo.ChannelId
+		_, apiErr = requestplugin.TaskAttempt(c, relayInfo)
+		relayInfo.SetRequestPluginIngress(relayInfo.RequestPluginSteps, relayInfo.RequestPluginRecord)
+	}
+	if apiErr != nil {
+		service.RecordRelayErrorLog(c, channelID, apiErr, relayInfo)
+	}
+	return apiErr
 }
 
 func RelayNotImplemented(c *gin.Context) {
@@ -830,6 +915,13 @@ type taskSubmissionOutcome struct {
 }
 
 func RelayTask(c *gin.Context) {
+	var relayInfo *relaycommon.RelayInfo
+	var taskErr *taskdto.TaskError
+	// Registered first so that it runs last: the request plugins' report
+	// hooks receive the submission once the client has the response.
+	defer func() {
+		requestplugin.Report(c, types.RelayFormatTask, relayInfo, nil, taskReportError(taskErr))
+	}()
 	relayInfo, err := relaycommon.GenRelayInfo(c, types.RelayFormatTask, nil, nil)
 	if err != nil {
 		respondTaskSubmissionError(c, &taskdto.TaskError{
@@ -843,11 +935,11 @@ func RelayTask(c *gin.Context) {
 		relayInfo.Action = action
 	}
 
-	if taskErr := relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
+	if taskErr = relay.ResolveOriginTask(c, relayInfo); taskErr != nil {
 		respondTaskSubmissionError(c, taskErr)
 		return
 	}
-	if taskErr := relay.ApplyOriginTaskAffinity(c, relayInfo); taskErr != nil {
+	if taskErr = relay.ApplyOriginTaskAffinity(c, relayInfo); taskErr != nil {
 		respondTaskSubmissionError(c, taskErr)
 		return
 	}
@@ -889,6 +981,19 @@ func RelayTask(c *gin.Context) {
 	presentTaskSubmission(c, outcome)
 }
 
+// taskReportError is the error a task submission's client received, as the
+// request plugins' report record shows it; nil when it succeeded.
+func taskReportError(taskErr *taskdto.TaskError) *hosttypes.NewAPIError {
+	if taskErr == nil {
+		return nil
+	}
+	err := taskErr.Error
+	if err == nil {
+		err = errors.New(taskErr.Message)
+	}
+	return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCode(taskErr.Code), taskErr.StatusCode)
+}
+
 // executeTaskSubmission owns the retry, billing, and persistence lifecycle.
 // It deliberately performs no client response writes so JSON and protocol
 // presenters share the same durable task barrier. Its cancellation semantics
@@ -924,6 +1029,37 @@ func executeTaskSubmissionWith(
 	if requestErr := c.Request.Context().Err(); requestErr != nil {
 		diagnostics.cancelled("before_attempt", 0)
 		return nil, service.TaskErrorWrapperLocal(requestErr, "request_cancelled", http.StatusRequestTimeout)
+	}
+
+	// The request plugins' ingress runs once, on the client body, before the
+	// submission is validated, priced or reserved; a changed body is decoded
+	// again.
+	stage = "request_plugins"
+	var format types.RelayFormat = types.RelayFormatTask
+	if pinnedValue, exists := c.Get(pluginruntime.ContextKeyPinnedEndpoint); exists {
+		if pinned, ok := pinnedValue.(pluginruntime.PinnedEndpoint); ok && (pinned.Protocol == string(types.RelayFormatOpenAIResponses) || pinned.Protocol == pluginruntime.ProtocolOpenAIImage) {
+			format = types.RelayFormat(pinned.Protocol)
+		}
+	}
+	ingressModel := relayInfo.OriginModelName
+	if ingressModel == "" {
+		ingressModel = common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
+	}
+	changed, ingressSteps, ingressRecord, ingressErr := requestplugin.SubmitIngress(c, format, ingressModel)
+	relayInfo.SetRequestPluginIngress(ingressSteps, ingressRecord)
+	if ingressErr != nil {
+		// The submission reached no channel and reserved nothing; its error
+		// log shows what the plugins did.
+		service.RecordRelayErrorLog(c, 0, ingressErr, relayInfo)
+		taskErr = requestplugin.TaskError(ingressErr)
+		diagnostics.failed(stage, "request_plugin", taskErr, false)
+		return nil, taskErr
+	}
+	if changed {
+		if taskErr = middleware.RefreshTaskPluginRequest(c); taskErr != nil {
+			diagnostics.failed(stage, "request_decode", taskErr, false)
+			return nil, taskErr
+		}
 	}
 
 	retryParam := buildRelayRetryParam(c, relayInfo)
@@ -1024,6 +1160,10 @@ func executeTaskSubmissionWith(
 					common.GetContextKeyString(c, constant.ContextKeyChannelKey), channel.GetAutoBan()),
 				taskAPIError,
 				relayInfo)
+		} else if requestplugin.Stopped(taskErr) {
+			// A request plugin stopped the attempt; its error log shows what
+			// the plugins did.
+			service.RecordRelayErrorLog(c, channel.Id, taskReportError(taskErr), relayInfo)
 		}
 
 		willRetry := decision.Action == "retry"
@@ -1100,6 +1240,9 @@ func executeTaskSubmissionWith(
 	if len(result.PluginState) > 0 {
 		task.PrivateData.PluginState = result.PluginState
 	}
+	// A request plugin instance that may report the task gets it once, at
+	// its final state.
+	task.PrivateData.RequestPlugins = requestplugin.TaskReport(c, relayInfo)
 	task.Action = relayInfo.Action
 	if immediate := result.Immediate; immediate != nil {
 		task.Status = model.TaskStatus(immediate.Status)
@@ -1160,6 +1303,11 @@ func executeTaskSubmissionWith(
 		return nil, taskErr
 	}
 	durable = true
+	requestplugin.TaskCreated(c)
+	if immediateTerminal {
+		// Reported once settled, whatever the settlement did.
+		defer requestplugin.ReportTask(task)
+	}
 	stage = "settle"
 	diagnostics.durable(task)
 	diagnostics.settleStart(task, result.Quota)
@@ -1317,6 +1465,8 @@ func decideTaskRetry(c *gin.Context, taskErr *taskdto.TaskError, retryTimes int)
 		stop.Reason = "request_completed"
 	case taskErr.NoRetry:
 		stop.Reason = "task_accepted"
+	case requestplugin.Stopped(taskErr):
+		stop.Reason, stop.Source = "local_rejection", "plugin"
 	case service.ShouldSkipRetryAfterChannelAffinityFailure(c):
 		stop.Reason, stop.Source = "strict_session", "session_rule"
 		if source := service.RequestPolicy(c).SessionModeSource; source != "" {

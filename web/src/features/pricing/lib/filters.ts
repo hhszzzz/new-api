@@ -38,6 +38,7 @@ import {
   isUnconfiguredTaskUsageModel,
 } from './dynamic-price'
 import { isTokenBasedModel } from './model-helpers'
+import { withBasePricing } from './plugin-pricing'
 import { calculateTokenPrice } from './price'
 
 // ----------------------------------------------------------------------------
@@ -87,8 +88,10 @@ export function filterByGroup(
 
 /** Pricing category of the active configuration, shared by filters and counts. */
 export function getModelQuotaType(
-  model: PricingModel
+  listedModel: PricingModel
 ): Exclude<QuotaTypeOption, 'all'> | undefined {
+  const model = withBasePricing(listedModel)
+  // Task-usage models retain their own category.
   if (hasTaskUsageSchema(model)) return QUOTA_TYPES.TASK
 
   if (model.billing_mode === 'tiered_expr' && model.billing_expr) {
@@ -186,9 +189,10 @@ const PRICE_SORTS: Partial<
 
 /** Sort by the card's example total for generic price ordering. */
 function getSortPrice(
-  model: PricingModel,
+  listedModel: PricingModel,
   kind: SortPriceKind
 ): number | undefined {
+  const model = withBasePricing(listedModel)
   if (kind === 'price') {
     const example = getCardExamplePrice(model, { tokenUnit: 'M' })
     if (example) return example.total

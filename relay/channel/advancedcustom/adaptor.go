@@ -40,6 +40,11 @@ type Adaptor struct {
 	converted bool
 	route     hostdto.AdvancedCustomRoute
 	converter string
+	// upstreamPath is the path a provider plugin chose for the request, in
+	// place of the route's upstream_path, and upstreamURL the whole address
+	// it chose instead.
+	upstreamPath string
+	upstreamURL  string
 }
 
 func (a *Adaptor) Init(info *relaycommon.RelayInfo) {
@@ -222,6 +227,20 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 	return a.routeURL(info)
 }
 
+// UseUpstreamPath sends the request to path, a path a provider plugin chose,
+// in place of the route's upstream_path. The caller has checked that it
+// starts with a single /.
+func (a *Adaptor) UseUpstreamPath(path string) {
+	a.upstreamPath, a.upstreamURL = path, ""
+}
+
+// UseUpstreamURL sends the request to target, an absolute http(s) address a
+// provider plugin chose, in place of the route's; the route auth query still
+// applies. An empty target keeps the route's address.
+func (a *Adaptor) UseUpstreamURL(target string) {
+	a.upstreamPath, a.upstreamURL = "", target
+}
+
 func (a *Adaptor) BuildModelListRequest(info *relaycommon.RelayInfo) (string, http.Header, error) {
 	return a.buildManagementRequest(info, hostdto.AdvancedCustomModelListPath)
 }
@@ -262,7 +281,7 @@ func (a *Adaptor) buildManagementRequest(info *relaycommon.RelayInfo, management
 		return "", nil, fmt.Errorf("converter %q does not support %s requests", converter, managementPath)
 	}
 
-	requestURL, err := buildRouteURL(route, converter, info)
+	requestURL, err := buildRouteURL(route, converter, info, a.upstreamPath, a.upstreamURL)
 	if err != nil {
 		return "", nil, err
 	}
@@ -312,6 +331,21 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, header *http.Header, info *
 }
 
 func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (*channel.TransportResult, error) {
+	result, err := a.DoRequestWith(a, c, info, requestBody)
+	if err != nil {
+		return nil, err
+	}
+	transportResult, ok := result.(*channel.TransportResult)
+	if !ok {
+		return nil, fmt.Errorf("unexpected advanced custom transport result %T", result)
+	}
+	return transportResult, nil
+}
+
+// DoRequestWith is DoRequest with the request URL and headers built by
+// transport, which may add to the route's own: a provider plugin channel
+// passes its adaptor to send the plugin credential.
+func (a *Adaptor) DoRequestWith(transport channel.Adaptor, c *gin.Context, info *relaycommon.RelayInfo, requestBody io.Reader) (any, error) {
 	if err := a.resolve(c, info); err != nil {
 		return nil, err
 	}
@@ -319,15 +353,20 @@ func (a *Adaptor) DoRequest(c *gin.Context, info *relaycommon.RelayInfo, request
 		return nil, errors.New("advanced custom converter routes cannot be used with pass-through request body")
 	}
 
-	if info.RelayMode == relayconstant.RelayModeAudioTranscription ||
-		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
-		(info.RelayMode == relayconstant.RelayModeImagesEdits && !isJSONRequest(c)) {
-		return channel.HTTPResult(channel.DoFormRequest(a, c, info, requestBody))
+	if UsesFormRequest(c, info) {
+		return channel.HTTPResult(channel.DoFormRequest(transport, c, info, requestBody))
 	}
 	if info.RelayMode == relayconstant.RelayModeRealtime {
-		return channel.WebSocketResult(channel.DoWssRequest(a, c, info, requestBody))
+		return channel.WebSocketResult(channel.DoWssRequest(transport, c, info, requestBody))
 	}
-	return channel.HTTPResult(channel.DoApiRequest(a, c, info, requestBody))
+	return channel.HTTPResult(channel.DoApiRequest(transport, c, info, requestBody))
+}
+
+// UsesFormRequest reports a request whose body is multipart form data.
+func UsesFormRequest(c *gin.Context, info *relaycommon.RelayInfo) bool {
+	return info != nil && (info.RelayMode == relayconstant.RelayModeAudioTranscription ||
+		info.RelayMode == relayconstant.RelayModeAudioTranslation ||
+		(info.RelayMode == relayconstant.RelayModeImagesEdits && !isJSONRequest(c)))
 }
 
 func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycommon.RelayInfo) (usage dto.UsageResult, err *hosttypes.NewAPIError) {
@@ -457,13 +496,31 @@ func canonicalIncomingPath(requestPath string) string {
 }
 
 func (a *Adaptor) routeURL(info *relaycommon.RelayInfo) (string, error) {
-	return buildRouteURL(a.route, a.converter, info)
+	return buildRouteURL(a.route, a.converter, info, a.upstreamPath, a.upstreamURL)
 }
 
-func buildRouteURL(route hostdto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo) (string, error) {
-	parsedURL, err := resolveUpstreamTargetURL(applyUpstreamPathTemplate(strings.TrimSpace(route.UpstreamPath), info), info)
+// buildRouteURL builds the URL of a request on route. A non-empty
+// upstreamPath takes the place of the route's upstream_path: it joins the
+// channel base URL, or the origin of an upstream_path that is a full URL, and
+// {model} is not replaced in it. A non-empty upstreamURL takes the place of
+// the whole address.
+func buildRouteURL(route hostdto.AdvancedCustomRoute, converter string, info *relaycommon.RelayInfo, upstreamPath, upstreamURL string) (string, error) {
+	routePath := applyUpstreamPathTemplate(strings.TrimSpace(route.UpstreamPath), info)
+	if upstreamURL != "" {
+		routePath = upstreamURL
+	}
+	parsedURL, err := resolveUpstreamTargetURL(routePath, info)
 	if err != nil {
 		return "", err
+	}
+	if upstreamPath != "" {
+		baseURL := info.ChannelBaseUrl
+		if !strings.HasPrefix(routePath, "/") {
+			baseURL = (&url.URL{Scheme: parsedURL.Scheme, User: parsedURL.User, Host: parsedURL.Host}).String()
+		}
+		if parsedURL, err = joinBaseURLAndUpstreamPath(baseURL, upstreamPath); err != nil {
+			return "", err
+		}
 	}
 	if shouldUseGeminiStreamURL(converter, info) {
 		useGeminiStreamGenerateContentURL(parsedURL)

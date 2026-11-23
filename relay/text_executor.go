@@ -20,6 +20,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relay/output"
+	"github.com/QuantumNous/new-api/relay/requestplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -75,14 +76,43 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 	}
 	plan, ok := selectedProtocolPlan(c)
 	if !ok {
-		settings, _ := common.Marshal(info.ChannelOtherSettings)
-		channelSettings, _ := common.Marshal(info.ChannelSetting)
-		candidate := &model.Channel{Id: info.ChannelId, Type: info.ChannelType, BaseURL: common.GetPointer(info.ChannelBaseUrl), OtherSettings: string(settings), Setting: common.GetPointer(string(channelSettings)), ModelMapping: common.GetPointer(c.GetString("model_mapping"))}
-		features, featureErr := channelcompat.ExtractRequestFeatureSet(relayconvert.ProtocolForFormat(info.RelayFormat), before)
+		requestProtocol := relayconvert.ProtocolForFormat(info.RelayFormat)
+		if isCompact {
+			// Compaction has its own operation and path, but carries a
+			// Responses request body and shares that protocol's converters.
+			requestProtocol = relayconvert.ProtocolResponses
+		}
+		features, featureErr := channelcompat.ExtractRequestFeatureSet(requestProtocol, before)
 		if featureErr != nil {
 			return newConvertRequestFailedError(c, info, featureErr)
 		}
-		plan = channelcompat.PlanForRequest(candidate, relayconvert.ProtocolForFormat(info.RelayFormat), info.SelectionModelName(), c.Request.URL.Path, features)
+		if info.ApiType == constant.APITypeProviderPlugin {
+			operation, known := relayconvert.DetectOperation(c.Request.URL.Path)
+			if !known {
+				return newConvertRequestFailedError(c, info, fmt.Errorf("provider plugin request path has no protocol operation"))
+			}
+			transport := relayconvert.TransportHTTP
+			if features.Stream {
+				transport = relayconvert.TransportSSE
+			}
+			plan = channelcompat.ProtocolPlan{
+				Operation:        operation.ID,
+				Transport:        transport,
+				Conversion:       hostdto.ProtocolConversionSafe,
+				RequestMode:      hostdto.ProtocolRequestStructured,
+				StateScope:       hostdto.ProtocolStateDisabled,
+				RequestProtocol:  requestProtocol,
+				UpstreamProtocol: requestProtocol,
+				Status:           channelcompat.StatusNative,
+				StateMode:        channelcompat.StateModeNone,
+				Features:         features,
+			}
+		} else {
+			settings, _ := common.Marshal(info.ChannelOtherSettings)
+			channelSettings, _ := common.Marshal(info.ChannelSetting)
+			candidate := &model.Channel{Id: info.ChannelId, Type: info.ChannelType, BaseURL: common.GetPointer(info.ChannelBaseUrl), OtherSettings: string(settings), Setting: common.GetPointer(string(channelSettings)), ModelMapping: common.GetPointer(c.GetString("model_mapping"))}
+			plan = channelcompat.PlanForRequest(candidate, requestProtocol, info.SelectionModelName(), c.Request.URL.Path, features)
+		}
 		common.SetContextKey(c, constant.ContextKeyProtocolPlan, plan)
 	}
 	if plan.Status == channelcompat.StatusIncompatible {
@@ -159,6 +189,31 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		relayconvert.RecordGeminiReasoningEffort(req, info)
 		applyGeminiLeadingSystemPrompt(c, info, req)
 	}
+	// Chat-to-Responses policy lets outbound plugins inspect the client-shaped
+	// request before converting it. Channel overrides run afterward so their
+	// final values reach the actual upstream request.
+	outboundApplied := false
+	if chatRequest, ok := request.(*dto.GeneralOpenAIRequest); ok &&
+		plan.RequestProtocol == channelcompat.ProtocolChat && plan.UpstreamProtocol == channelcompat.ProtocolResponses {
+		chatJSON, err := common.Marshal(chatRequest)
+		if err != nil {
+			return newConvertRequestFailedError(c, info, err)
+		}
+		chatJSON, err = relaycommon.RemoveDisabledFields(chatJSON, info.ChannelOtherSettings, info.ShouldPassThroughBody())
+		if err != nil {
+			return newConvertRequestFailedError(c, info, err)
+		}
+		chatJSON, apiErr := requestplugin.Outbound(c, info, chatJSON)
+		if apiErr != nil {
+			return apiErr
+		}
+		var overridden dto.GeneralOpenAIRequest
+		if err := common.Unmarshal(chatJSON, &overridden); err != nil {
+			return newAPIErrorFromParamOverride(err)
+		}
+		request = &overridden
+		outboundApplied = true
+	}
 	restorePlan := func() {}
 	if info.RelayMode != relayconstant.RelayModeCompletions {
 		restorePlan = applyProtocolPlan(info, plan)
@@ -170,6 +225,9 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		storage, err := common.GetBodyStorage(c)
 		if err != nil {
 			return hosttypes.NewErrorWithStatusCode(err, hosttypes.ErrorCodeReadRequestBodyFailed, http.StatusBadRequest, hosttypes.ErrOptionWithSkipRetry())
+		}
+		if apiErr := requestplugin.PassThrough(c, info, storage); apiErr != nil {
+			return apiErr
 		}
 		body = common.NewReplayableBodyReader(storage)
 	} else {
@@ -196,6 +254,13 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 		if err != nil {
 			return newConvertRequestFailedError(c, info, err)
 		}
+		if !outboundApplied {
+			var apiErr *hosttypes.NewAPIError
+			jsonBody, apiErr = requestplugin.Outbound(c, info, jsonBody)
+			if apiErr != nil {
+				return apiErr
+			}
+		}
 		if len(info.ParamOverride) > 0 {
 			jsonBody, err = relaycommon.ApplyParamOverrideWithRelayInfo(jsonBody, info)
 			if err != nil {
@@ -207,6 +272,9 @@ func executeText(c *gin.Context, info *relaycommon.RelayInfo) *hosttypes.NewAPIE
 			if err != nil {
 				return newConvertRequestFailedError(c, info, err)
 			}
+		}
+		if apiErr := requestplugin.Egress(c, info, jsonBody); apiErr != nil {
+			return apiErr
 		}
 		outbound, closer, err := relaycommon.NewOutboundJSONBody(jsonBody)
 		if err != nil {

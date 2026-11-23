@@ -146,7 +146,9 @@ export function CommonLogsFilterBar<TData>(
     const groups = isAdmin
       ? [
           ...(adminGroups?.data ?? []),
-          ...(groupHistory?.data ?? []).map((entry) => entry.old_name),
+          ...(Array.isArray(groupHistory?.data) ? groupHistory.data : []).map(
+            (entry) => entry.old_name
+          ),
         ]
       : Object.keys(userGroups?.data ?? {})
     return [...new Set(groups)]

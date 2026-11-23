@@ -473,64 +473,68 @@ export function EmailSettingsSection({
                   </FormDescription>
                 </FormItem>
 
-            <FormItem>
-              <FormLabel>{t('SMTP encryption')}</FormLabel>
-              <FormControl>
-                <RadioGroup
-                  value={getSmtpSecurityMode({
-                    SMTPSSLEnabled: smtpSslEnabled,
-                    SMTPStartTLSEnabled: smtpStartTlsEnabled,
-                  })}
-                  onValueChange={(value) => {
-                    const mode = value as SmtpSecurityMode
-                    form.setValue('SMTPSSLEnabled', mode === 'ssl_tls', {
-                      shouldDirty: true,
-                    })
-                    form.setValue('SMTPStartTLSEnabled', mode === 'starttls', {
-                      shouldDirty: true,
-                    })
-                  }}
-                  className='gap-3'
-                >
-                  <div className='flex items-center gap-2'>
-                    <RadioGroupItem value='none' id='smtp-security-none' />
-                    <Label
-                      htmlFor='smtp-security-none'
-                      className='cursor-pointer font-normal'
+                <FormItem>
+                  <FormLabel>{t('SMTP encryption')}</FormLabel>
+                  <FormControl>
+                    <RadioGroup
+                      value={getSmtpSecurityMode({
+                        SMTPSSLEnabled: smtpSslEnabled,
+                        SMTPStartTLSEnabled: smtpStartTlsEnabled,
+                      })}
+                      onValueChange={(value) => {
+                        const mode = value as SmtpSecurityMode
+                        form.setValue('SMTPSSLEnabled', mode === 'ssl_tls', {
+                          shouldDirty: true,
+                        })
+                        form.setValue(
+                          'SMTPStartTLSEnabled',
+                          mode === 'starttls',
+                          {
+                            shouldDirty: true,
+                          }
+                        )
+                      }}
+                      className='gap-3'
                     >
-                      {t('No encryption')}
-                    </Label>
-                  </div>
-                  <div className='flex items-center gap-2'>
-                    <RadioGroupItem
-                      value='ssl_tls'
-                      id='smtp-security-ssl-tls'
-                    />
-                    <Label
-                      htmlFor='smtp-security-ssl-tls'
-                      className='cursor-pointer font-normal'
-                    >
-                      {t('SSL/TLS')}
-                    </Label>
-                  </div>
-                  <div className='flex items-center gap-2'>
-                    <RadioGroupItem
-                      value='starttls'
-                      id='smtp-security-starttls'
-                    />
-                    <Label
-                      htmlFor='smtp-security-starttls'
-                      className='cursor-pointer font-normal'
-                    >
-                      {t('STARTTLS')}
-                    </Label>
-                  </div>
-                </RadioGroup>
-              </FormControl>
-              <FormDescription>
-                {t('Choose one SMTP transport security mode')}
-              </FormDescription>
-            </FormItem>
+                      <div className='flex items-center gap-2'>
+                        <RadioGroupItem value='none' id='smtp-security-none' />
+                        <Label
+                          htmlFor='smtp-security-none'
+                          className='cursor-pointer font-normal'
+                        >
+                          {t('No encryption')}
+                        </Label>
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        <RadioGroupItem
+                          value='ssl_tls'
+                          id='smtp-security-ssl-tls'
+                        />
+                        <Label
+                          htmlFor='smtp-security-ssl-tls'
+                          className='cursor-pointer font-normal'
+                        >
+                          {t('SSL/TLS')}
+                        </Label>
+                      </div>
+                      <div className='flex items-center gap-2'>
+                        <RadioGroupItem
+                          value='starttls'
+                          id='smtp-security-starttls'
+                        />
+                        <Label
+                          htmlFor='smtp-security-starttls'
+                          className='cursor-pointer font-normal'
+                        >
+                          {t('STARTTLS')}
+                        </Label>
+                      </div>
+                    </RadioGroup>
+                  </FormControl>
+                  <FormDescription>
+                    {t('Choose one SMTP transport security mode')}
+                  </FormDescription>
+                </FormItem>
 
                 <FormField
                   control={form.control}

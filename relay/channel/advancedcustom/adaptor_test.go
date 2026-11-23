@@ -2,9 +2,11 @@ package advancedcustom
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	hostdto "github.com/QuantumNous/new-api/dto"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -23,6 +25,7 @@ import (
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
+	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,6 +64,17 @@ func TestAdaptorUsesExactRouteAndQueryAuth(t *testing.T) {
 // URL, and a channel proxy is dialed before the upstream; a failed handshake
 // must hide both.
 func TestAdaptorMasksDialedHostsInDialFailure(t *testing.T) {
+	originalDialer := websocket.DefaultDialer
+	dialer := *originalDialer
+	dialer.NetDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if strings.HasPrefix(address, "localhost:") {
+			return (&net.Dialer{}).DialContext(ctx, network, address)
+		}
+		return nil, fmt.Errorf("dial %s %s: test connection failure", network, address)
+	}
+	websocket.DefaultDialer = &dialer
+	t.Cleanup(func() { websocket.DefaultDialer = originalDialer })
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 	}))

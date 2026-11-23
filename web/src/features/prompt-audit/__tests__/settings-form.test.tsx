@@ -393,7 +393,7 @@ describe('prompt audit settings page', () => {
     // Every expanded node contributes one identically labelled toggle, so the
     // lookup has to accept a list.
     await user.click(
-      screen.getAllByRole('button', { name: 'Toggle password visibility' })[0]
+      screen.getAllByRole('button', { name: 'Show password' })[0]
     )
     expect(screen.getByLabelText('API token')).toHaveAttribute('type', 'text')
 

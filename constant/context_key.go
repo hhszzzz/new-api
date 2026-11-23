@@ -66,6 +66,9 @@ const (
 	ContextKeyChannelIsMultiKey        ContextKey = "channel_is_multi_key"
 	ContextKeyChannelMultiKeyIndex     ContextKey = "channel_multi_key_index"
 	ContextKeyChannelKey               ContextKey = "channel_key"
+	// ContextKeyProviderPlugin holds the jsplugin.PinnedPlugin whose relay
+	// routes serve this request on a task plugin channel.
+	ContextKeyProviderPlugin ContextKey = "provider_plugin"
 
 	// ContextKeyUpstreamRequestOrigin is the scheme and host of the last upstream
 	// request, which differs from the base URL for absolute Advanced Custom routes
@@ -114,10 +117,14 @@ const (
 	ContextKeyAdminRejectReason ContextKey = "admin_reject_reason"
 
 	// ContextKeyLanguage stores the user's language preference for i18n
-	ContextKeyLanguage             ContextKey = "language"
-	ContextKeyIsStream             ContextKey = "is_stream"
-	ContextKeyResponseStreamStatus ContextKey = "response_stream_status"
-	ContextKeyRequestTransport     ContextKey = "request_transport"
+	ContextKeyLanguage                ContextKey = "language"
+	ContextKeyIsStream                ContextKey = "is_stream"
+	ContextKeyResponseStreamStatus    ContextKey = "response_stream_status"
+	ContextKeyStreamErrorBeforeOutput ContextKey = "stream_error_before_output"
+	ContextKeyRequestTransport        ContextKey = "request_transport"
+	// ContextKeyConsumeLog holds the *model.RecordConsumeLogParams of the
+	// request's last consume log, which request plugin report hooks read.
+	ContextKeyConsumeLog ContextKey = "consume_log"
 
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit

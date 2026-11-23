@@ -598,6 +598,24 @@ const (
 	MsgDistributorUserModelRouteUnavailable    = "distributor.user_model_route_unavailable"
 	MsgDistributorChannelOutsideUserRoute      = "distributor.channel_outside_user_route"
 	MsgDistributorModelNotAccessible           = "distributor.model_not_accessible"
+
+	MsgQuotaUserInsufficient             = "quota.user_insufficient"
+	MsgQuotaPreConsumeInsufficient       = "quota.pre_consume_insufficient"
+	MsgQuotaSubscriptionInsufficient     = "quota.subscription_insufficient"
+	MsgRelayModelPriceNotConfigured      = "relay.model_price_not_configured"
+	MsgRelayModelPriceNotConfiguredAdmin = "relay.model_price_not_configured_admin"
+	MsgRelayTaskUsagePriceUnsupported    = "relay.task_usage_price_unsupported"
+	MsgRelaySharedTaskPriceNeedsOverride = "relay.shared_task_price_needs_override"
+	MsgRelayTaskPriceNotConfigured       = "relay.task_price_not_configured"
+	MsgRelayTaskChannelDisabled          = "relay.task_channel_disabled"
+	MsgRelayGroupSaturated               = "relay.group_saturated"
+	MsgRelayGroupUpstreamSaturated       = "relay.group_upstream_saturated"
+	MsgRelayRetryGetChannelFailed        = "relay.retry_get_channel_failed"
+	MsgRelayRetryNoAvailableChannel      = "relay.retry_no_available_channel"
+	MsgRelayAccessTokenUnsupported       = "relay.access_token_unsupported"
+	MsgRelayRequestRejected              = "relay.request_rejected"
+	MsgRelayRequestPluginFailed          = "relay.request_plugin_failed"
+	MsgRelayResponseRejected             = "relay.response_rejected"
 )
 
 // Emails and the name of the token created at registration, in the
@@ -713,9 +731,6 @@ const (
 	MsgRelayInvalidUrl                         = "relay.invalid_url"
 	MsgRelayTaskProtocolError                  = "relay.task_protocol_error"
 	MsgRelayTaskSubmitNoResult                 = "relay.task_submit_no_result"
-	MsgRelayTaskUsagePriceUnsupported          = "relay.task_usage_price_unsupported"
-	MsgRelaySharedTaskPriceNeedsOverride       = "relay.shared_task_price_needs_override"
-	MsgRelayTaskChannelDisabled                = "relay.task_channel_disabled"
 	MsgRelayTaskPersistFailed                  = "relay.task_persist_failed"
 	MsgRelayTaskBillingSettleFailed            = "relay.task_billing_settle_failed"
 	MsgRelayUserModelRouteNoAvailable          = "relay.user_model_route_no_available"
@@ -727,8 +742,6 @@ const (
 	MsgRelayNoCompatibleChannelReason          = "relay.no_compatible_channel_reason"
 	MsgRelayNoChannelSupportsRequestPath       = "relay.no_channel_supports_request_path"
 	MsgRelayRequestBodyTooLarge                = "relay.request_body_too_large"
-	MsgRelayModelPriceNotConfigured            = "relay.model_price_not_configured"
-	MsgRelayModelPriceNotConfiguredAdmin       = "relay.model_price_not_configured_admin"
 )
 
 // Setup related messages
@@ -852,16 +865,21 @@ const (
 	MsgNotifyQuotaLowBark              = "notify.quota_low_bark"
 	MsgNotifyQuotaLowGotify            = "notify.quota_low_gotify"
 	MsgNotifyQuotaLowEmail             = "notify.quota_low_email"
+)
 
-	MsgChannelNotifyDisabledSubject = "channel.notify_disabled_subject"
-	MsgChannelNotifyDisabledContent = "channel.notify_disabled_content"
-	MsgChannelNotifyEnabledSubject  = "channel.notify_enabled_subject"
-	MsgChannelNotifyEnabledContent  = "channel.notify_enabled_content"
-	MsgChannelTestCompletedSubject  = "channel.test_completed_subject"
-	MsgChannelTestCompletedContent  = "channel.test_completed_content"
-	MsgChannelResponseTimeExceeded  = "channel.response_time_exceeded"
-	MsgChannelModelDisabledSubject  = "channel.model_disabled_subject"
-	MsgChannelModelDisabledContent  = "channel.model_disabled_content"
+// Channel notices sent to administrators who receive them and to model update
+// watchers
+const (
+	MsgChannelNotifyDisabledSubject  = "channel.notify_disabled_subject"
+	MsgChannelNotifyDisabledContent  = "channel.notify_disabled_content"
+	MsgChannelNotifyEnabledSubject   = "channel.notify_enabled_subject"
+	MsgChannelNotifyEnabledContent   = "channel.notify_enabled_content"
+	MsgChannelNotifyScheduledSubject = "channel.notify_scheduled_subject"
+	MsgChannelTestCompletedSubject   = "channel.test_completed_subject"
+	MsgChannelTestCompletedContent   = "channel.test_completed_content"
+	MsgChannelResponseTimeExceeded   = "channel.response_time_exceeded"
+	MsgChannelModelDisabledSubject   = "channel.model_disabled_subject"
+	MsgChannelModelDisabledContent   = "channel.model_disabled_content"
 
 	MsgChannelUpstreamUpdateNotifySubject   = "channel.upstream_update_notify_subject"
 	MsgChannelUpstreamUpdateSummary         = "channel.upstream_update_summary"

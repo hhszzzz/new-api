@@ -89,6 +89,8 @@ async function renderLogs(props: {
       data = { items: records, total: records.length }
     } else if (url === '/api/group/') {
       data = []
+    } else if (url === '/api/group/history') {
+      data = []
     } else if (url === '/api/user/self/groups') {
       data = {}
     }

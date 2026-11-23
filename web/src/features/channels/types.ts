@@ -123,6 +123,34 @@ export const channelUserRateLimitSchema = z.object({
 })
 
 export type ChannelUserRateLimit = z.infer<typeof channelUserRateLimitSchema>
+/** One limit of a balance, such as a usage window that resets. */
+const channelBalanceWindowSchema = z.object({
+  name: z.union([z.string(), z.record(z.string(), z.string())]),
+  used: z.number(),
+  limit: z.number(),
+  unit: z.string().nullish(),
+  /** Unix seconds. */
+  resetAt: z.number().nullish(),
+})
+
+const channelBalanceResultSchema = z.object({
+  /** In `currency`; null when the upstream reports only windows. */
+  amount: z.number().nullish(),
+  currency: z.string().nullish(),
+  unlimited: z.boolean().nullish(),
+  windows: z.array(channelBalanceWindowSchema).nullish(),
+  /** The last failed query, kept beside the last good result. */
+  error: z.string().nullish(),
+})
+
+export const channelBalanceDetailSchema = channelBalanceResultSchema.extend({
+  /** The balance of each key of a multi-key channel, by key index. */
+  keys: z.record(z.string(), channelBalanceResultSchema).nullish(),
+})
+
+export type ChannelBalanceWindow = z.infer<typeof channelBalanceWindowSchema>
+export type ChannelBalanceResult = z.infer<typeof channelBalanceResultSchema>
+export type ChannelBalanceDetail = z.infer<typeof channelBalanceDetailSchema>
 
 export const channelSchema = z.object({
   id: z.number(),
@@ -140,6 +168,7 @@ export const channelSchema = z.object({
   other: z.string().default(''),
   balance: z.number().default(0), // in USD
   balance_updated_time: z.number(),
+  balance_detail: channelBalanceDetailSchema.nullish(),
   models: z.string().default(''),
   group: z.string().default('default'),
   used_quota: z.number().default(0),
@@ -309,6 +338,8 @@ export type ChannelAggregateDetachResponse = {
 export interface ChannelSettings {
   task_plugin_key?: string
   task_extend_plugin_keys?: string[]
+  /** Request processing instance ids, in the order they run. */
+  request_plugins?: string[]
   force_format?: boolean
   thinking_to_content?: boolean
   proxy?: string
@@ -399,6 +430,8 @@ export interface ProtocolCapabilityModelOverride {
   model_pattern: string
   upstream_protocols?: UpstreamProtocol[]
   allow_conversion?: boolean
+  /** The values of the bound plugin's channel settings (type 61). */
+  plugin_config?: Record<string, unknown>
 }
 
 export interface AdvancedCustomConfig {
@@ -487,6 +520,7 @@ export interface ChannelBalanceResponse {
   success: boolean
   message?: string
   balance?: number
+  balance_detail?: ChannelBalanceDetail | null
   currency?: string
   raw_response?: string
 }
